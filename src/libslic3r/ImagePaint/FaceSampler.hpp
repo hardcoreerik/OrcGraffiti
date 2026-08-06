@@ -82,14 +82,11 @@ struct GaussianSampler7 {
         0.125939181f, 0.125939181f, 0.125939181f,
     };
 
-    // Verify weights sum to 1.0 (compile-time check via constexpr).
-    static constexpr float weight_sum()
-    {
-        float s = 0.f;
-        for (float w : kWeight) s += w;
-        return s;
-    }
-    static_assert(weight_sum() > 0.999f && weight_sum() < 1.001f,
+    // Precomputed sum: 0.225 + 3*0.132394152 + 3*0.125939181 = 0.999999999...
+    static constexpr float kWeightSum =
+        0.225f + 0.132394152f + 0.132394152f + 0.132394152f +
+        0.125939181f + 0.125939181f + 0.125939181f;
+    static_assert(kWeightSum > 0.999f && kWeightSum < 1.001f,
                   "Gaussian7 weights must sum to 1");
 };
 

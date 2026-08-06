@@ -145,8 +145,13 @@ FaceSample sample_one_face(
 
 ColorRgba8 sample_bilinear(const DecodedImage& image, double u, double v)
 {
+    // ColorRgba8 default has a=255; use explicit {0,0,0,0} for transparent black.
     if (image.width == 0 || image.height == 0)
-        return {};
+        return ColorRgba8{0, 0, 0, 0};
+
+    // UV outside [0,1] → no paint; return transparent black.
+    if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
+        return ColorRgba8{0, 0, 0, 0};
 
     // Map UV to pixel coordinates. (0,0) = top-left texel centre.
     const double px = u * image.width  - 0.5;

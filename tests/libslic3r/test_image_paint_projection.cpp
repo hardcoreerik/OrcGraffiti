@@ -4,6 +4,7 @@
 #include "libslic3r/ImagePaint/Projection.hpp"
 #include "libslic3r/ImagePaint/FaceSampler.hpp"
 
+using namespace Slic3r;
 using namespace Slic3r::ImagePaint;
 using namespace Catch::Matchers;
 
@@ -167,8 +168,9 @@ static DecodedImage make_2x2_image()
 TEST_CASE("sample_bilinear top-left corner returns TL pixel", "[ImagePaint][Sampling]")
 {
     auto img = make_2x2_image();
-    const auto px = sample_bilinear(img, 0.0, 0.0);
-    // At (0,0) we get exactly the TL pixel
+    // With the -0.5 offset convention, pixel (i,j) center is at UV = ((i+0.5)/w, (j+0.5)/h).
+    // TL pixel (0,0) center in 2x2 image: u=0.25, v=0.25.
+    const auto px = sample_bilinear(img, 0.25, 0.25);
     CHECK(px.r == 255);
     CHECK(px.g == 0);
     CHECK(px.b == 0);

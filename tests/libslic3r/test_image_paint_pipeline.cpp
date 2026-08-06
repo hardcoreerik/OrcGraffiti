@@ -4,6 +4,7 @@
 #include "libslic3r/ImagePaint/ImagePaintPipeline.hpp"
 #include "libslic3r/ImagePaint/PaintStateMerge.hpp"
 
+using namespace Slic3r;
 using namespace Slic3r::ImagePaint;
 
 // ---------------------------------------------------------------------------
@@ -291,7 +292,7 @@ TEST_CASE("run_image_paint single-face mesh paints the face", "[ImagePaint][Pipe
     CHECK(result->states[0] == kStateExtruderMin);
 }
 
-TEST_CASE("run_image_paint 1×1 pixel image paints correctly", "[ImagePaint][Pipeline][Hardening]")
+TEST_CASE("run_image_paint 1x1 pixel image paints correctly", "[ImagePaint][Pipeline][Hardening]")
 {
     const auto image  = make_solid_image(1, 1, 255, 0, 0);
     const auto result = run_image_paint(base_request(), image);

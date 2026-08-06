@@ -24,8 +24,13 @@ struct TopologyFingerprint {
     std::uint32_t vertex_count      = 0;
     std::uint32_t triangle_count    = 0;
 
-    bool operator==(const TopologyFingerprint&) const = default;
-    bool operator!=(const TopologyFingerprint&) const = default;
+    bool operator==(const TopologyFingerprint& o) const noexcept {
+        return connectivity_hash == o.connectivity_hash &&
+               geometry_hash     == o.geometry_hash     &&
+               vertex_count      == o.vertex_count      &&
+               triangle_count    == o.triangle_count;
+    }
+    bool operator!=(const TopologyFingerprint& o) const noexcept { return !(*this == o); }
 };
 
 // Compute a fingerprint directly from raw arrays (worker-thread safe).

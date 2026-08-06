@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "libslic3r/ImagePaint/TopologyFingerprint.hpp"
+#include "libslic3r/ImagePaint/ImagePaintCompat.hpp"
 
 using namespace Slic3r::ImagePaint;
 
@@ -54,7 +55,7 @@ TEST_CASE("Identical mesh produces equal fingerprints", "[ImagePaint][Fingerprin
     auto fp2 = fingerprint_from_arrays(verts, idxs);
 
     CHECK(fp1 == fp2);
-    CHECK(fp1.vertex_count   == 1);
+    CHECK(fp1.vertex_count   == 3);  // triangle_vertices() returns 3 vertices
     CHECK(fp1.triangle_count == 1);
 }
 
@@ -114,8 +115,8 @@ TEST_CASE("Triangle reorder changes connectivity hash", "[ImagePaint][Fingerprin
 TEST_CASE("Empty mesh produces zero fingerprint with zero counts", "[ImagePaint][Fingerprint]")
 {
     auto fp = fingerprint_from_arrays(
-        std::span<const float>{},
-        std::span<const int32_t>{});
+        Span<const float>{},
+        Span<const int32_t>{});
 
     CHECK(fp.vertex_count   == 0);
     CHECK(fp.triangle_count == 0);

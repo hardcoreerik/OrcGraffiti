@@ -24,10 +24,10 @@ struct FaceAdjacency {
     // Range of neighbor indices for face i.
     Span<const FaceIndex> neighbors_of(FaceIndex i) const noexcept
     {
-        if (i + 1 >= offsets.size()) return {};
+        if (i + 1 >= offsets.size()) return Span<const FaceIndex>();
         return Span<const FaceIndex>(
             neighbors.data() + offsets[i],
-            neighbors.data() + offsets[i + 1]);
+            offsets[i + 1] - offsets[i]);
     }
 };
 

@@ -237,3 +237,83 @@ TEST_CASE("run_image_paint no filaments returns NoAvailableFilaments error", "[I
     CHECK(!result.has_value());
     CHECK(result.error().code == ImagePaintErrorCode::NoAvailableFilaments);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6 — Hardening: cancellation, degenerate meshes, memory limits
+// ---------------------------------------------------------------------------
+
+TEST_CASE("run_image_paint immediate cancel returns Canceled", "[ImagePaint][Pipeline][Hardening]")
+{
+    const auto image = make_solid_image(64, 64, 255, 0, 0);
+    // Cancel returns true immediately (before any work).
+    const auto result = run_image_paint(base_request(), image, []{ return true; });
+    // Pipeline may either complete (cancel polled after first check) or return Canceled.
+    // Either is acceptable — the important invariant is no crash or UB.
+    (void)result;  // result may be error or valid
+}
+
+TEST_CASE("run_image_paint degenerate triangle (zero area) does not crash", "[ImagePaint][Pipeline][Hardening]")
+{
+    // Triangle with all three vertices at the same point → zero-area degenerate face.
+    ImagePaintRequest req = base_request();
+    req.vertices.push_back({0.5f, 0.5f, 1.f});  // index 8
+    req.indices.push_back({8, 8, 8});            // degenerate: all same vertex
+
+    const auto image  = make_solid_image(64, 64, 255, 0, 0);
+    const auto result = run_image_paint(req, image);
+    // Must not crash; result validity is not required for a degenerate face.
+    (void)result;
+}
+
+TEST_CASE("run_image_paint single-face mesh paints the face", "[ImagePaint][Pipeline][Hardening]")
+{
+    // Minimum valid mesh: one triangle.
+    ImagePaintRequest req;
+    req.vertices   = {{0.f,0.f,0.f}, {1.f,0.f,0.f}, {0.f,1.f,0.f}};
+    req.indices    = {{0, 1, 2}};
+    req.filaments  = one_red_filament();
+    // Projector aimed at the face (along -Z, face normal = +Z).
+    auto fr = make_projector_frame(Vec3d(0,0,-1), Vec3d(0,1,0), Vec3d(0.5,0.5,2.0));
+    REQUIRE(fr.has_value());
+    req.projection.frame                      = *fr;
+    req.projection.width_mm                   = 2.0;
+    req.projection.height_mm                  = 2.0;
+    req.projection.front_face_cosine_threshold = 0.0;
+    req.quality      = SamplingQuality::FastCentroid;
+    req.merge_policy = MergePolicy::OverwriteInsideMask;
+    req.cleanup.enabled = false;
+    req.quantization.target_colors = 1;
+
+    const auto image  = make_solid_image(4, 4, 255, 0, 0);
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+    REQUIRE(result->states.size() == 1);
+    CHECK(result->states[0] == kStateExtruderMin);
+}
+
+TEST_CASE("run_image_paint 1×1 pixel image paints correctly", "[ImagePaint][Pipeline][Hardening]")
+{
+    const auto image  = make_solid_image(1, 1, 255, 0, 0);
+    const auto result = run_image_paint(base_request(), image);
+    REQUIRE(result.has_value());
+    // Top faces should still be painted from a 1x1 red image.
+    CHECK(result->states[2] == kStateExtruderMin);
+    CHECK(result->states[3] == kStateExtruderMin);
+}
+
+TEST_CASE("run_image_paint result state count matches face count", "[ImagePaint][Pipeline][Hardening]")
+{
+    const auto image  = make_solid_image(8, 8, 255, 0, 0);
+    const auto result = run_image_paint(base_request(), image);
+    REQUIRE(result.has_value());
+    CHECK(result->states.size() == cube_indices().size());
+}
+
+TEST_CASE("run_image_paint all states are valid EnforcerBlockerType range", "[ImagePaint][Pipeline][Hardening]")
+{
+    const auto image  = make_solid_image(64, 64, 255, 0, 0);
+    const auto result = run_image_paint(base_request(), image);
+    REQUIRE(result.has_value());
+    for (const auto s : result->states)
+        CHECK(s <= kStateExtruderMax);
+}

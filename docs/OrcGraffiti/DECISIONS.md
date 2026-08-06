@@ -16,8 +16,9 @@ Fork OrcaSlicer/OrcaSlicer to hardcoreerik/OrcGraffiti. Use this name throughout
 ### Consequences
 
 - Fork URL: https://github.com/hardcoreerik/OrcGraffiti
-- Upstream remote: https://github.com/OrcaSlicer/OrcaSlicer
+- Upstream remote: https://github.com/OrcaSlicer/OrcaSlicer (fetch only — push disabled)
 - The fork begins at commit b97ca3c0ace8cb04eb520d86417fbe13b7ddbdde which matches the architecture research baseline exactly.
+- No upstream contribution is planned. This is a private product fork.
 
 ### Evidence
 
@@ -25,7 +26,28 @@ Fork created via `gh repo fork OrcaSlicer/OrcaSlicer --fork-name OrcGraffiti`.
 
 ---
 
-## ADR-0002 — Use Existing MMU Facet Format
+## ADR-0002 — No upstream contribution
+
+**Status:** Accepted
+**Date:** 2026-08-05
+
+### Context
+
+OrcaSlicer is AGPL-3.0. A fork can legally contribute back, but the project owner has no current intention to upstream this work.
+
+### Decision
+
+The upstream remote is configured fetch-only (`git remote set-url --push upstream no-push`). All work stays in hardcoreerik/OrcGraffiti. Per-phase PRs are opened within that fork only.
+
+### Consequences
+
+- No accidental pushes to OrcaSlicer/OrcaSlicer are possible.
+- AGPL compliance still required for any distribution of the fork.
+- Can re-enable upstream contribution later if desired.
+
+---
+
+## ADR-0003 — Use Existing MMU Facet Format
 
 **Status:** Accepted
 **Date:** 2026-08-05
@@ -50,7 +72,7 @@ Documented in Project_Truth.md section 5.1. No new format risk.
 
 ---
 
-## ADR-0003 — GUI-Independent Core Pipeline
+## ADR-0004 — GUI-Independent Core Pipeline
 
 **Status:** Accepted
 **Date:** 2026-08-05

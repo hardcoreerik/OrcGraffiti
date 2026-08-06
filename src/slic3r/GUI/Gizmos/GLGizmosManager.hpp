@@ -90,6 +90,7 @@ public:
         Assembly,
         Simplify,
         BrimEars,
+        ImagePainter,  // OrcGraffiti: image-to-MMU-paint projection
         //SlaSupports,
         // BBS
         //FaceRecognition,

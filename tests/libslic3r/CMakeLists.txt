@@ -5,6 +5,7 @@ add_executable(${_TEST_NAME}_tests
     test_image_paint_fingerprint.cpp
     test_image_paint_projection.cpp
     test_image_paint_color.cpp
+    test_image_paint_pipeline.cpp
     test_3mf.cpp
     test_aabbindirect.cpp
     test_appconfig.cpp

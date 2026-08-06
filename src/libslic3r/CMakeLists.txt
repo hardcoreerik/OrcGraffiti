@@ -44,6 +44,10 @@ set(lisbslic3r_sources
     ImagePaint/FaceAdjacency.cpp
     ImagePaint/RegionCleaner.hpp
     ImagePaint/RegionCleaner.cpp
+    ImagePaint/PaintStateMerge.hpp
+    ImagePaint/PaintStateMerge.cpp
+    ImagePaint/ImagePaintPipeline.hpp
+    ImagePaint/ImagePaintPipeline.cpp
     AABBMesh.cpp
     AABBMesh.hpp
     AABBTreeIndirect.hpp

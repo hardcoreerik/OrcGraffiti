@@ -1,5 +1,9 @@
 #include "FaceSampler.hpp"
 
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
+
+#include <atomic>
 #include <cmath>
 #include <cassert>
 
@@ -203,29 +207,39 @@ sample_faces(
 {
     assert(face_end <= indices.size());
     const std::size_t count = face_end - face_begin;
+    if (count == 0) return {};
 
-    std::vector<FaceSample> results;
-    results.reserve(count);
+    // Pre-size so threads can write by index without synchronisation.
+    std::vector<FaceSample> results(count);
 
-    constexpr std::size_t kCancelCheckInterval = 256;
+    // Shared cancellation flag polled by each TBB grain.
+    std::atomic<bool> canceled{false};
 
-    for (std::size_t i = face_begin; i < face_end; ++i) {
-        // Cancellation check at regular intervals.
-        if (cancel && (i - face_begin) % kCancelCheckInterval == 0 && cancel())
-            break;
+    tbb::parallel_for(
+        tbb::blocked_range<std::size_t>(face_begin, face_end, /*grain=*/256),
+        [&](const tbb::blocked_range<std::size_t>& range) {
+            if (canceled.load(std::memory_order_relaxed)) return;
+            if (cancel && cancel()) {
+                canceled.store(true, std::memory_order_relaxed);
+                return;
+            }
 
-        const Vec3i32& tri = indices[i];
-        assert(tri[0] >= 0 && static_cast<std::size_t>(tri[0]) < vertices.size());
-        assert(tri[1] >= 0 && static_cast<std::size_t>(tri[1]) < vertices.size());
-        assert(tri[2] >= 0 && static_cast<std::size_t>(tri[2]) < vertices.size());
+            for (std::size_t i = range.begin(); i < range.end(); ++i) {
+                if (canceled.load(std::memory_order_relaxed)) break;
 
-        results.push_back(sample_one_face(
-            static_cast<FaceIndex>(i),
-            vertices[tri[0]],
-            vertices[tri[1]],
-            vertices[tri[2]],
-            image, proj, quality));
-    }
+                const Vec3i32& tri = indices[i];
+                assert(tri[0] >= 0 && static_cast<std::size_t>(tri[0]) < vertices.size());
+                assert(tri[1] >= 0 && static_cast<std::size_t>(tri[1]) < vertices.size());
+                assert(tri[2] >= 0 && static_cast<std::size_t>(tri[2]) < vertices.size());
+
+                results[i - face_begin] = sample_one_face(
+                    static_cast<FaceIndex>(i),
+                    vertices[tri[0]],
+                    vertices[tri[1]],
+                    vertices[tri[2]],
+                    image, proj, quality);
+            }
+        });
 
     return results;
 }

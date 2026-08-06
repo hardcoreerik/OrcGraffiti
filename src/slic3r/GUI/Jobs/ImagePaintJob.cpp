@@ -66,8 +66,13 @@ void ImagePaintJob::finalize(bool canceled, std::exception_ptr& eptr)
 
     plater->take_snapshot(_L("Image Paint"));
 
-    // Write per-face states to mmu_segmentation_facets via TriangleSelector.
+    // Deserialize existing paint first so faces outside the image footprint are preserved.
     TriangleSelector selector(vol->mesh());
+    selector.deserialize(vol->mmu_segmentation_facets.get_data(),
+                         /*needs_reset=*/true,
+                         EnforcerBlockerType::ExtruderMax);
+
+    // Overlay plan states — only non-None entries (faces the image touched).
     const auto& states = m_plan->states;
     for (std::size_t i = 0; i < states.size(); ++i) {
         if (states[i] != Slic3r::ImagePaint::kStateNone)

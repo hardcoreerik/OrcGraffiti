@@ -17,6 +17,8 @@ OrcGraffiti is an OrcaSlicer-native tool that projects a 2D image onto a 3D mode
 
 The first production version is a native C++ feature in an OrcaSlicer fork. A safe Python plugin bridge may be added later.
 
+**Agent / automation surface (design):** headless CLI + optional skill/MCP so AI tools can paint and inspect without the GUI. Normative design lives in `docs/OrcGraffiti/Agent_Surface.md` (ADR-0010). Implementation is deferred; the GUI-independent ImagePaint core is the shared engine for both gizmo and future CLI.
+
 ## 2. Problem Statement
 
 MakerLab Mesh Graffiti proves that image-to-surface coloring is useful, but the external workflow has limitations:

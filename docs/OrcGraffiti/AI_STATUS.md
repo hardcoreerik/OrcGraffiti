@@ -2,74 +2,42 @@
 
 ## Current Phase
 
-Phase 6+ mapping quality — **tests green**, full app rebuild with projection fixes.
+Phase 6+ mapping quality green. **Agent Surface design documented** (implementation deferred).
 
 ## Current Branch
 
-feature/image-paint-phase1-types (carries Phases 0–6 + mapping fixes)
+feature/image-paint-phase1-types
 
-## Current Commit
+## Docs just added (2026-08-06)
 
-fix: mesh-local auto-fit projection + libjpeg path for JPG (see branch tip)
+| Doc | Purpose |
+|---|---|
+| `docs/OrcGraffiti/Agent_Surface.md` | Full agent/CLI/MCP design (research-backed) |
+| `docs/OrcGraffiti/skills/orcgraffiti-cli/SKILL.md` | Agent skill template (binary TBD) |
+| `docs/OrcGraffiti/schemas/paint_report.schema.json` | JSON schema sketch for paint reports |
+| `DECISIONS.md` ADR-0010 | Hybrid CLI first |
+| `Roadmap.md` §20 | AS-0…AS-7 gates |
 
-## Working Build Configuration
+## Working Build
 
-ALL DEPS BUILT (25). Main cmake CONFIGURED. PATH: CMake before Strawberry.
-
-```
-cmake --build build --config Release --target libslic3r_tests -- -m
-ctest --test-dir build/tests/libslic3r -C Release -L ImagePaint --output-on-failure
-
-cmake --build build --config Release --target OrcaSlicer -- -m
-# launch: build\src\Release\orca-slicer.exe
-```
-
-## Most Recent Verified Behavior
-
-**ctest -L ImagePaint: 69/69 PASSED** (includes garth.jpg integration).
-
-User smoke (prior session): gizmo toolbar worked, app loaded recent items, but mapping quality was poor.
-
-Root causes fixed overnight:
-1. **Coordinate space bug** — mesh is volume-local; camera was world-space. Now transform look/up via `inverse(world_matrix).linear()`.
-2. **Fixed 100×100 mm plane** — now `fit_planar_projection()` auto-sizes to mesh extent as seen from camera; preserves image aspect.
-3. **JPEG failed silently** — OpenCV dep built with `WITH_JPEG=OFF`. Added **libjpeg-turbo** fallback in `ImageDecoder` (JPEG already linked to libslic3r). Verified with `garth.jpg` (692×994).
-4. Gizmo UI: **Auto-fit to view** (default on) + **Fit now** button; caches image pixel size for aspect.
-
-## Sample Image
-
-`C:\Users\hardc\OneDrive\Pictures\garth.jpg` (also copied to `build/garth.jpg` for tests)
-
-How to retest:
-1. Launch `build\src\Release\orca-slicer.exe`
-2. Load a model, select it
-3. Open Image Paint gizmo
-4. Browse → garth.jpg (Auto-fit checked)
-5. Face the surface you want painted, click Apply
-6. Use multicolor filaments for visible result
+- ImagePaint unit tests: **69/69** (incl. garth.jpg integration when present)
+- Full app: Release `orca-slicer.exe` builds
+- Sample image: `C:\Users\hardc\OneDrive\Pictures\garth.jpg`
 
 ## Active Task
 
-User retest mapping quality after sleep. Optional next: placement preview overlay, rotation control, world-space transform snapshot per Project_Truth §14 full chain.
+User retest mapping in GUI when ready. Agent Surface **implementation not started** — design freeze AS-0.
 
 ## Next Three Tasks
 
-1. User interactive retest of mapping with garth.jpg
-2. Optional: on-canvas projector rectangle preview
-3. Optional: rebuild OpenCV with WITH_JPEG=ON long-term (libjpeg path is fine for MVP)
-
-## Known Failures
-
-None in ImagePaint unit suite.
-
-## Blockers
-
-None.
+1. GUI retest auto-fit paint with garth.jpg
+2. When scheduled: AS-1 CLI skeleton (`orcgraffiti info`)
+3. Keep PR #1 updated
 
 ## Open PRs
 
-PR #1: https://github.com/hardcoreerik/OrcGraffiti/pull/1 (draft)
+https://github.com/hardcoreerik/OrcGraffiti/pull/1
 
 ## Updated
 
-2026-08-06 overnight mapping fix session
+2026-08-06 — Agent Surface documentation set written

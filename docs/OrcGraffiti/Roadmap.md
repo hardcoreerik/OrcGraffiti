@@ -38,6 +38,7 @@ Development principles:
 | 8 | Textures/remeshing | UV conversion and controlled topology change |
 | 9 | Plugin bridge | safe external face-state mutation |
 | 10 | Release/upstream | public fork release and upstream strategy |
+| AS-* | Agent Surface | headless CLI + skill + optional MCP (see §20) |
 
 ## 3. Branch Strategy
 
@@ -676,5 +677,31 @@ Any task is done only when:
 Perform Phase 0, then Phase 1.
 
 The first useful demonstration is not a GUI. It is a deterministic unit test that projects a known image onto a known cube and produces an expected face-state array.
+
+## 20. Agent Surface Track (parallel to GUI phases)
+
+Normative design: [`Agent_Surface.md`](Agent_Surface.md). Decision: ADR-0010 in `DECISIONS.md`.
+
+This track exposes Image Paint (and documents existing Orca slice CLI) for **AI agents and automation**. It does **not** replace Phases 0–6; it depends on the GUI-independent ImagePaint core (already required by ADR-0004).
+
+| Phase | Name | Exit gate (summary) |
+|---|---|---|
+| **AS-0** | Spec freeze | `Agent_Surface.md` accepted |
+| **AS-1** | CLI skeleton | `orcgraffiti info` JSON on fixture |
+| **AS-2** | Paint dry-run | `paint --dry-run` report ok |
+| **AS-3** | Paint write | 3MF reopens with MMU paint in GUI |
+| **AS-4** | Skill | `skills/orcgraffiti-cli/SKILL.md` cookbook works |
+| **AS-5** | MCP thin wrap | info/paint tools return report JSON |
+| **AS-6** | Slice chapter | skill documents paint→`orca-slicer --slice` |
+| **AS-7** | Hardening | CLI tests in CI |
+
+**Rules:**
+
+- No GUI automation.
+- CLI paint must not mutate printer/filament profiles (INV-008).
+- Prefer new `orcgraffiti` binary for paint/info; keep slice on existing `orca-slicer`.
+- MCP/Python wrap CLI; do not fork business logic.
+
+**Implementation status:** deferred until explicitly scheduled. Core unit tests remain the quality gate for algorithms.
 
 The second demonstration is a 3MF round trip that proves the paint survives while printer/process/filament settings remain unchanged.

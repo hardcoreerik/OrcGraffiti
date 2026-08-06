@@ -94,3 +94,44 @@ All image paint algorithms live in `src/libslic3r/ImagePaint/` with zero GUI dep
 ### Evidence
 
 Architecture doc sections 2 and 3. Roadmap Phase 4 prerequisite for Phase 5.
+
+---
+
+## ADR-0010 — Agent Surface: Hybrid CLI First (Skill, then MCP)
+
+**Status:** Accepted (design); implementation deferred
+**Date:** 2026-08-06
+
+### Context
+
+Users and AI agents (Claude, Grok, Codex, Cursor) need machine-usable access to OrcGraffiti Image Paint and existing Orca capabilities. Options considered:
+
+1. Headless CLI over ImagePaint core
+2. Agent skill documentation only
+3. MCP server
+4. Python bindings
+5. GUI automation / RPA
+
+Prior art: PrusaSlicer/Orca/Bambu CLI for slicing; CuraEngine headless engine pattern; Blender-MCP for AI tool access; FreeCADCmd/OpenSCAD file pipelines. No mature public CLI for image→MMU face paint was found.
+
+### Decision
+
+1. **Primary surface:** headless CLI for paint/info (orcgraffiti), reusing `libslic3r/ImagePaint`.
+2. **Slice/export:** document and call **existing** `orca-slicer` CLI; do not reimplement Print.
+3. **Skills (P1):** ship `SKILL.md` after CLI exists.
+4. **MCP (P2):** thin wrapper over CLI only.
+5. **Python (P3):** deferred; subprocess-first if needed.
+6. **GUI RPA:** rejected.
+
+Normative design: `docs/OrcGraffiti/Agent_Surface.md`.
+
+### Consequences
+
+- Aligns with ADR-0004 (GUI-independent core).
+- Agents get file→file + JSON reports; undo is file versioning, not GUI snapshots.
+- Implementation gated as Agent Surface phases AS-0…AS-7 in Roadmap.
+- Must not mutate printer profiles (Project_Truth INV-008).
+
+### Evidence
+
+Research survey and contracts in Agent_Surface.md §§3–13.

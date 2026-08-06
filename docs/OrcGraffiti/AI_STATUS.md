@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 6 (Hardening) in progress. Main source build configured; libslic3r_tests building.
+Phase 6 (Hardening) — C++17 compat complete. Ready for libslic3r_tests build + ctest.
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ feature/image-paint-phase1-types (carries Phases 0–6)
 
 ## Current Commit
 
-9bfa0519b0 test(phase6): 7 hardening tests — cancellation, degenerate mesh, edge cases
+12f0677a07 fix: C++17 compat -- ImagePaintCompat.hpp replaces std::expected/std::span
 
 ## Working Build Configuration
 
@@ -53,25 +53,22 @@ Ready to test once binary build + link completes — load via Browse button in g
 
 ## Active Task
 
-Complete Phase 6:
-1. Wait for libslic3r_tests binary to compile
-2. Run: ctest --test-dir build/tests/libslic3r -C Release -R image_paint
-3. Fix any compile errors
-4. If all 73 tests pass → Phase 6 exit gate met → MVP complete
+Build libslic3r_tests and run ctest -R image_paint to confirm all 73 tests pass.
+C++17 compat is complete — no more std::expected/std::span build errors expected.
 
 ## Next Three Tasks
 
-1. Monitor libslic3r_tests build output for errors
-2. Run ctest -R image_paint
-3. Update PR #1 with actual test results
+1. Build: cmake --build build --config Release --target libslic3r_tests -- -m
+2. Run: ctest --test-dir build/tests/libslic3r -C Release -R image_paint --output-on-failure
+3. Update PR #1 with actual ctest results
 
 ## Known Failures
 
-Tests are compiling. Awaiting results.
+None — compat fixes committed. Build not yet re-run after compat fix.
 
 ## Blockers
 
-libslic3r_tests build running.
+None.
 
 ## Open PRs
 
@@ -81,20 +78,18 @@ PR #1: https://github.com/hardcoreerik/OrcGraffiti/pull/1
 
 ## Loop Schedule
 
-CronJob 7cdaa6af — fires every 30 min at :03 and :33 past the hour.
+Loop stopped by user. CronJob 7cdaa6af cancelled.
 
 ## Last Loop Summary
 
-Loop 6 (2026-08-05):
-- Fixed PLanned existing-state bug in ImagePaintJob::finalize
-  (now deserializes mmu_segmentation_facets before overlaying plan)
-- Added TBB parallel_for in FaceSampler
-- Added 7 Phase 6 hardening tests (73 total)
-- Built all 25 deps (OpenSSL needed Strawberry Perl)
-- Configured main source cmake (VS2022, x64, BUILD_TESTS=ON)
-- Updated PR #1 to Phase 6 MVP
-- Pushed to origin: feature/image-paint-phase1-types
+Session close (2026-08-05):
+- Fixed C++17 compat: added ImagePaintCompat.hpp with Expected<T,E>, make_unexpected(),
+  Span<T> (C++17-safe replacements for std::expected C++23 and std::span C++20)
+- Replaced all std::expected<>/std::span<> across 18 files in src/libslic3r/ImagePaint/
+- Fixed Eigen ternary type deduction in ImagePaintPipeline.cpp (MSVC compatibility)
+- Committed: 12f0677a07
+- Pushed to origin
 
 ## Updated
 
-2026-08-05 Loop 6
+2026-08-05 Session close

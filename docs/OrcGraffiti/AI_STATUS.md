@@ -2,15 +2,15 @@
 
 ## Current Phase
 
-Phase 4 complete (code). Phase 5 — Interactive Gizmo is next.
+Phase 5 complete (source). Phase 6 — Hardening is next.
 
 ## Current Branch
 
-feature/image-paint-phase1-types (carries Phases 0–4)
+feature/image-paint-phase1-types (carries Phases 0–5)
 
 ## Current Commit
 
-2e28de6845 feat: Phase 4 — PaintStateMerge, ImagePaintPipeline, 11 pipeline tests
+2a946605f5 feat(phase5): Image Paint gizmo scaffold — GLGizmoImagePainter + ImagePaintJob
 
 ## Working Build Configuration
 
@@ -23,29 +23,31 @@ Log: devlogs/OrcGraffiti/deps_build.log
 
 SOURCE ONLY — 66 unit tests written, build still running.
 
-Phase 4 pipeline: ImagePaintRequest -> FacePaintPlan end-to-end headless.
-Stages: decode -> fingerprint -> geometry -> sample -> quantize -> match -> assign -> clean -> merge.
-Merge policies: PreserveExisting (paint only kStateNone faces), OverwriteInsideMask.
-Golden-cube integration tests: solid-colour image, transparent image, PreserveExisting,
-diagnostics, determinism, error cases (empty mesh, no filaments).
+Phase 5 gizmo scaffold complete:
+- GLGizmoImagePainter: ImGui panel with image path/browse, width/height/colors, Apply/Cancel, status
+- ImagePaintJob: process() on worker thread, finalize() on UI thread with TopologyFingerprint check + undo snapshot
+- GLGizmosManager: ImagePainter registered (EType enum + emplace_back)
+- slic3r/CMakeLists updated
 
 ## Sample Image
 
 User image: C:\Users\hardc\OneDrive\Pictures\garth.jpg
-Will be wired into the Phase 5 gizmo file-picker (image_path in ImagePaintRequest).
+Ready to test once build is complete — load garth.jpg via Browse button in the gizmo panel.
 
 ## Active Task
 
-Phase 5 — Interactive Gizmo:
-  GLGizmoImagePainter (renders placement handles + preview overlay)
-  ImagePaintController (coordinates background job + Apply)
-  ImagePaintJob (worker: wraps run_image_paint, posts FacePaintPlan to UI thread)
+Phase 6 — Hardening:
+  - TBB parallelism in FaceSampler (sample_faces loop)
+  - Memory/pixel limits enforcement
+  - Existing mmu_segmentation_facets read-back in apply() (currently always empty)
+  - Cross-platform build verification
+  - Performance test with garth.jpg on a dense mesh
 
 ## Next Three Tasks
 
-1. ImagePaintJob.hpp/.cpp — background worker that calls run_image_paint
-2. ImagePaintController.hpp/.cpp — state machine: Idle -> Projecting -> Applied
-3. GLGizmoImagePainter.hpp — gizmo scaffold (Phase 5 day 1, GUI code allowed here)
+1. TBB parallel_for in FaceSampler::sample_faces
+2. Read existing paint state in GLGizmoImagePainter::apply() from vol->mmu_segmentation_facets
+3. Attempt full main-source cmake configure once dep build completes
 
 ## Known Failures
 
@@ -54,13 +56,15 @@ Tests are source-only pending build completion.
 
 ## Blockers
 
-Dep build in progress. Once complete, attempt main source build.
-ctest --test-dir build/tests -C Release -R image_paint --output-on-failure
+Dep build in progress. Once complete:
+  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH=deps/build_x64/destdir/usr/local
+  cmake --build build --config RelWithDebInfo --target ALL_BUILD -- -m
+  ctest --test-dir build/tests -C RelWithDebInfo -R image_paint --output-on-failure
 
 ## Open PRs
 
 PR #1: https://github.com/hardcoreerik/OrcGraffiti/pull/1
-  Covers: Phases 0-4 (all source, 66 tests)
+  Covers: Phases 0-5 (all source, 66 tests + gizmo scaffold)
   Status: Draft, build pending
 
 ## Loop Schedule
@@ -69,13 +73,14 @@ CronJob 7cdaa6af — fires every 30 min at :03 and :33 past the hour.
 
 ## Last Loop Summary
 
-Loop 4 (2026-08-05):
-- Implemented Phase 4: PaintStateMerge (merge policies) + ImagePaintPipeline (end-to-end)
-- 11 new unit tests (4 merge-policy + 7 golden-cube integration)
-- 66 total unit tests across 4 files (Phases 1-4)
-- Updated PR #1 to cover Phases 0-4
+Loop 5 (2026-08-05):
+- Fixed redundant vertex-copy code in GLGizmoImagePainter::apply()
+- Fixed stl_triangle_vertex_indices → Vec3i32 type mismatch with .cast<int32_t>()
+- Implemented Phase 5: GLGizmoImagePainter + ImagePaintJob
+- 7 files changed (4 new, 3 modified): 478 insertions
+- Updated PR #1 to cover Phases 0-5
 - Pushed to origin: feature/image-paint-phase1-types
 
 ## Updated
 
-2026-08-05 Loop 4
+2026-08-05 Loop 5

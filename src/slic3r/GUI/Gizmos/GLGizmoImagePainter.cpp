@@ -224,7 +224,8 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
     ImGui::PopItemWidth();
     ImGui::SameLine();
     if (m_imgui->button(_L("Browse"))) {
-        wxFileDialog dlg(m_parent.wxglcanvas_as_wxwindow(),
+        // Parent must be a complete wxWindow type (wxGLCanvas is only forward-declared here).
+        wxFileDialog dlg(wxGetApp().plater(),
                          _L("Open image"), "", "",
                          "Image files (*.jpg;*.jpeg;*.png;*.bmp)|*.jpg;*.jpeg;*.png;*.bmp",
                          wxFD_OPEN | wxFD_FILE_MUST_EXIST);

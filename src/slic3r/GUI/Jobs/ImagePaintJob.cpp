@@ -64,7 +64,7 @@ void ImagePaintJob::finalize(bool canceled, std::exception_ptr& eptr)
         return;
     }
 
-    plater->take_snapshot(_L("Image Paint"));
+    plater->take_snapshot(_u8L("Image Paint"));
 
     // Deserialize existing paint first so faces outside the image footprint are preserved.
     TriangleSelector selector(vol->mesh());

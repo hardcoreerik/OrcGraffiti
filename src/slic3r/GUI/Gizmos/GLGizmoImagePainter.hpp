@@ -33,7 +33,8 @@ protected:
     bool        on_is_activable() const override;
     void        on_set_state() override;
     void        on_render() override {}
-    void        on_render_for_picking() override {}
+    // Picking uses raycasters (GLGizmoBase::on_register_raycasters_for_picking);
+    // no separate on_render_for_picking in current OrcaSlicer base.
     void        on_render_input_window(float x, float y, float bottom_limit) override;
 
 private:

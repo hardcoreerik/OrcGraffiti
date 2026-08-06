@@ -32,6 +32,18 @@ set(lisbslic3r_sources
     ImagePaint/Projection.cpp
     ImagePaint/FaceSampler.hpp
     ImagePaint/FaceSampler.cpp
+    ImagePaint/ColorSpace.hpp
+    ImagePaint/ColorSpace.cpp
+    ImagePaint/ColorDifference.hpp
+    ImagePaint/ColorDifference.cpp
+    ImagePaint/ColorQuantizer.hpp
+    ImagePaint/ColorQuantizer.cpp
+    ImagePaint/FilamentMatcher.hpp
+    ImagePaint/FilamentMatcher.cpp
+    ImagePaint/FaceAdjacency.hpp
+    ImagePaint/FaceAdjacency.cpp
+    ImagePaint/RegionCleaner.hpp
+    ImagePaint/RegionCleaner.cpp
     AABBMesh.cpp
     AABBMesh.hpp
     AABBTreeIndirect.hpp

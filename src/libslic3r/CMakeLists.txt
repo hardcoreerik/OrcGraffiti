@@ -22,6 +22,10 @@ option(BUILD_SHARED_LIBS "Build shared libs" OFF)
 option(USE_SLIC3R_CONSOLE_LOG "Enable console logging in RelWithDebInfo builds" OFF)
 
 set(lisbslic3r_sources
+    ImagePaint/ImagePaintTypes.hpp
+    ImagePaint/ImagePaintErrors.hpp
+    ImagePaint/TopologyFingerprint.hpp
+    ImagePaint/TopologyFingerprint.cpp
     AABBMesh.cpp
     AABBMesh.hpp
     AABBTreeIndirect.hpp

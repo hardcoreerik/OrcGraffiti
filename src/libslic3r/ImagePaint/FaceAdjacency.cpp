@@ -18,7 +18,7 @@ inline std::uint64_t edge_key(int32_t a, int32_t b) noexcept
 
 } // namespace
 
-FaceAdjacency build_face_adjacency(std::span<const Vec3i32> indices)
+FaceAdjacency build_face_adjacency(Span<const Vec3i32> indices)
 {
     const std::size_t n_faces = indices.size();
 

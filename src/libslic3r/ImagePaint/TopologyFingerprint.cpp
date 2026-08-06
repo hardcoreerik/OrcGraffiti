@@ -23,8 +23,8 @@ std::uint64_t fnv1a_64(const void* data, std::size_t size) noexcept
 }
 
 TopologyFingerprint fingerprint_from_arrays(
-    std::span<const float>   vertices,
-    std::span<const int32_t> indices)
+    Span<const float>   vertices,
+    Span<const int32_t> indices)
 {
     // vertex_count and triangle_count derived from array sizes.
     assert(vertices.size() % 3 == 0);
@@ -62,8 +62,8 @@ TopologyFingerprint fingerprint(const TriangleMesh& mesh)
     const std::size_t isize = its.indices.size() * 3;
 
     return fingerprint_from_arrays(
-        std::span<const float>  (verts, vsize),
-        std::span<const int32_t>(idxs,  isize));
+        Span<const float>  (verts, vsize),
+        Span<const int32_t>(idxs,  isize));
 }
 
 } // namespace Slic3r::ImagePaint

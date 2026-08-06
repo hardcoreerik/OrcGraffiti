@@ -3,8 +3,8 @@
 #include "ImagePaintTypes.hpp"
 #include "ImagePaintErrors.hpp"
 
+#include "ImagePaintCompat.hpp"
 #include <vector>
-#include <expected>
 
 namespace Slic3r::ImagePaint {
 
@@ -18,7 +18,7 @@ struct QuantizationSettings;
 //
 // All filament indices returned are 0-based (internal representation).
 // The caller is responsible for the 0->1-based conversion at the UI layer.
-std::expected<std::vector<ClusterMatch>, ImagePaintError>
+Expected<std::vector<ClusterMatch>, ImagePaintError>
 match_clusters_to_filaments(
     const std::vector<SourceCluster>&  clusters,
     const std::vector<FilamentColor>&  filaments,
@@ -27,12 +27,12 @@ match_clusters_to_filaments(
 // Central utility: validate and convert a 0-based FilamentIndex to a
 // SelectorState (which maps to EnforcerBlockerType).
 // Returns an error if the index is out of range.
-std::expected<SelectorState, ImagePaintError>
+Expected<SelectorState, ImagePaintError>
 filament_index_to_selector_state(FilamentIndex index);
 
 // Inverse: SelectorState -> 0-based FilamentIndex.
 // State 0 (NONE/unpainted) returns an error — it has no filament.
-std::expected<FilamentIndex, ImagePaintError>
+Expected<FilamentIndex, ImagePaintError>
 selector_state_to_filament_index(SelectorState state);
 
 } // namespace Slic3r::ImagePaint

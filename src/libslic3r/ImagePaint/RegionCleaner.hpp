@@ -4,7 +4,7 @@
 #include "FaceAdjacency.hpp"
 
 #include <vector>
-#include <span>
+#include "ImagePaintCompat.hpp"
 #include <functional>
 
 namespace Slic3r::ImagePaint {
@@ -36,8 +36,8 @@ std::uint32_t
 clean_tiny_regions(
     std::vector<SelectorState>&         proposed_states,
     const FaceAdjacency&                adjacency,
-    std::span<const Vec3d>              face_normals,
-    std::span<const double>             face_areas,
+    Span<const Vec3d>              face_normals,
+    Span<const double>             face_areas,
     const RegionCleanupSettings&        settings,
     const std::function<bool()>&        cancel = {});
 

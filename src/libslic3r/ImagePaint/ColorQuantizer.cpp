@@ -14,7 +14,7 @@ namespace {
 // target_k buckets, using the longest axis at each step.
 // Returns initial centroid Lab values.
 std::vector<ColorLab>
-median_cut_seed(std::span<const ColorSample> samples, std::uint32_t target_k)
+median_cut_seed(Span<const ColorSample> samples, std::uint32_t target_k)
 {
     if (samples.empty() || target_k == 0)
         return {};
@@ -101,7 +101,7 @@ median_cut_seed(std::span<const ColorSample> samples, std::uint32_t target_k)
 } // namespace
 
 std::vector<SourceCluster>
-quantize_colors(std::span<const ColorSample> samples,
+quantize_colors(Span<const ColorSample> samples,
                 const QuantizationSettings&   settings,
                 const std::function<bool()>&  cancel)
 {

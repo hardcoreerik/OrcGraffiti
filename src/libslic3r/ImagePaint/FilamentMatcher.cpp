@@ -16,38 +16,38 @@ namespace Slic3r::ImagePaint {
 // This is the ONLY place in the codebase that performs this conversion.
 // All other code uses SelectorState (uint8_t) or FilamentIndex (uint16_t).
 
-std::expected<SelectorState, ImagePaintError>
+Expected<SelectorState, ImagePaintError>
 filament_index_to_selector_state(FilamentIndex index)
 {
     // FilamentIndex is 0-based; SelectorState 1..16 correspond to Extruder1..16.
     const SelectorState state = static_cast<SelectorState>(index + 1u);
     if (state < kStateExtruderMin || state > kStateExtruderMax)
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::FilamentOutOfRange,
             "Filament index out of valid range.",
             "index=" + std::to_string(index)});
     return state;
 }
 
-std::expected<FilamentIndex, ImagePaintError>
+Expected<FilamentIndex, ImagePaintError>
 selector_state_to_filament_index(SelectorState state)
 {
     if (state < kStateExtruderMin || state > kStateExtruderMax)
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::FilamentOutOfRange,
             "Selector state does not correspond to a filament.",
             "state=" + std::to_string(state)});
     return static_cast<FilamentIndex>(state - 1u);
 }
 
-std::expected<std::vector<ClusterMatch>, ImagePaintError>
+Expected<std::vector<ClusterMatch>, ImagePaintError>
 match_clusters_to_filaments(
     const std::vector<SourceCluster>&  clusters,
     const std::vector<FilamentColor>&  filaments,
     bool                               one_to_one)
 {
     if (filaments.empty())
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::NoAvailableFilaments,
             "No filaments configured in the project."});
 
@@ -85,7 +85,7 @@ match_clusters_to_filaments(
         auto state_result = filament_index_to_selector_state(
             filaments[best_fi].project_index);
         if (!state_result)
-            return std::unexpected(state_result.error());
+            return make_unexpected(state_result.error());
 
         if (one_to_one) used[best_fi] = true;
 

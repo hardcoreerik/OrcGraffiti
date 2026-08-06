@@ -3,8 +3,8 @@
 #include "ImagePaintTypes.hpp"
 #include "ImagePaintErrors.hpp"
 
+#include "ImagePaintCompat.hpp"
 #include <filesystem>
-#include <expected>
 
 namespace Slic3r::ImagePaint {
 
@@ -20,7 +20,7 @@ namespace Slic3r::ImagePaint {
 //
 // UV convention: (u=0, v=0) = top-left pixel, matching the architecture doc.
 // No network access. No metadata execution.
-std::expected<DecodedImage, ImagePaintError>
+Expected<DecodedImage, ImagePaintError>
 decode_image(const std::filesystem::path& path,
              const ImageDecodeLimits&     limits = {});
 

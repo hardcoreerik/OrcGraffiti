@@ -5,7 +5,7 @@
 
 namespace Slic3r::ImagePaint {
 
-std::expected<ProjectorFrame, ImagePaintError>
+Expected<ProjectorFrame, ImagePaintError>
 make_projector_frame(const Vec3d& look_direction,
                      const Vec3d& up_hint,
                      const Vec3d& origin)
@@ -14,14 +14,14 @@ make_projector_frame(const Vec3d& look_direction,
 
     const Vec3d fwd = look_direction.normalized();
     if (fwd.norm() < kEps)
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::InvalidProjection,
             "Projection direction is degenerate (zero-length)."});
 
     // axis_u = cross(up_hint, fwd) — points image-right in a right-handed frame.
     Vec3d right = up_hint.cross(fwd);
     if (right.norm() < kEps)
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::InvalidProjection,
             "Look direction and up hint are parallel — cannot build projector frame."});
 

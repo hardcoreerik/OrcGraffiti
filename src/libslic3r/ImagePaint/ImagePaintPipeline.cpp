@@ -25,7 +25,8 @@ FaceGeometry compute_face_geometry(const Vec3f& va, const Vec3f& vb, const Vec3f
     const Vec3d ac = (vc - va).cast<double>();
     const Vec3d cross = ab.cross(ac);
     const double len = cross.norm();
-    return {len > 1e-12 ? cross / len : Vec3d::UnitZ(), 0.5 * len};
+    const Vec3d  normal = len > 1e-12 ? Vec3d(cross / len) : Vec3d::UnitZ();
+    return {normal, 0.5 * len};
 }
 
 // Assign a face Lab colour to the nearest cluster centroid by CIE76 squared distance.
@@ -42,18 +43,18 @@ std::uint32_t assign_to_cluster(const ColorLab& lab, const std::vector<SourceClu
     return best;
 }
 
-std::expected<FacePaintPlan, ImagePaintError>
+Expected<FacePaintPlan, ImagePaintError>
 run_pipeline(const ImagePaintRequest& req, const DecodedImage& image,
              const std::function<bool()>& cancel)
 {
     const std::size_t n_faces = req.indices.size();
 
     if (req.vertices.empty() || req.indices.empty())
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::NoEligibleFaces, "Mesh has no faces to paint."});
 
     if (req.filaments.empty())
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::NoAvailableFilaments, "No filaments provided."});
 
     // --- Topology fingerprint ---
@@ -80,14 +81,14 @@ run_pipeline(const ImagePaintRequest& req, const DecodedImage& image,
     }
 
     if (cancel && cancel())
-        return std::unexpected(ImagePaintError{ImagePaintErrorCode::Canceled, "Cancelled."});
+        return make_unexpected(ImagePaintError{ImagePaintErrorCode::Canceled, "Cancelled."});
 
     // --- Sample faces ---
     const auto samples = sample_faces(req.vertices, req.indices, image,
                                        req.projection, req.quality, 0, n_faces, cancel);
 
     if (cancel && cancel())
-        return std::unexpected(ImagePaintError{ImagePaintErrorCode::Canceled, "Cancelled."});
+        return make_unexpected(ImagePaintError{ImagePaintErrorCode::Canceled, "Cancelled."});
 
     // --- Build colour samples (weight = face area × alpha) ---
     std::vector<ColorSample> color_samples;
@@ -115,17 +116,17 @@ run_pipeline(const ImagePaintRequest& req, const DecodedImage& image,
     // --- Quantize ---
     const auto clusters = quantize_colors(color_samples, req.quantization, cancel);
     if (clusters.empty())
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::QuantizationFailed, "Colour quantization produced no clusters."});
 
     if (cancel && cancel())
-        return std::unexpected(ImagePaintError{ImagePaintErrorCode::Canceled, "Cancelled."});
+        return make_unexpected(ImagePaintError{ImagePaintErrorCode::Canceled, "Cancelled."});
 
     // --- Match clusters to filaments ---
     auto match_result = match_clusters_to_filaments(
         clusters, req.filaments, req.quantization.one_to_one_filament_match);
     if (!match_result)
-        return std::unexpected(match_result.error());
+        return make_unexpected(match_result.error());
     const auto& matches = *match_result;
 
     // Build cluster_id → SelectorState table.
@@ -155,7 +156,7 @@ run_pipeline(const ImagePaintRequest& req, const DecodedImage& image,
     diag.painted_surface_area_mm2 = painted_area;
 
     if (cancel && cancel())
-        return std::unexpected(ImagePaintError{ImagePaintErrorCode::Canceled, "Cancelled."});
+        return make_unexpected(ImagePaintError{ImagePaintErrorCode::Canceled, "Cancelled."});
 
     // --- Clean tiny regions ---
     if (req.cleanup.enabled && n_faces > 0) {
@@ -179,16 +180,16 @@ run_pipeline(const ImagePaintRequest& req, const DecodedImage& image,
 
 } // namespace
 
-std::expected<FacePaintPlan, ImagePaintError>
+Expected<FacePaintPlan, ImagePaintError>
 run_image_paint(const ImagePaintRequest& request, const std::function<bool()>& cancel)
 {
     auto img = decode_image(request.image_path, request.decode_limits);
     if (!img)
-        return std::unexpected(img.error());
+        return make_unexpected(img.error());
     return run_pipeline(request, *img, cancel);
 }
 
-std::expected<FacePaintPlan, ImagePaintError>
+Expected<FacePaintPlan, ImagePaintError>
 run_image_paint(const ImagePaintRequest& request, const DecodedImage& image,
                 const std::function<bool()>& cancel)
 {

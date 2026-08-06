@@ -21,7 +21,7 @@ bool is_jpeg(const std::filesystem::path& p)
 
 } // namespace
 
-std::expected<DecodedImage, ImagePaintError>
+Expected<DecodedImage, ImagePaintError>
 decode_image(const std::filesystem::path& path,
              const ImageDecodeLimits&     limits)
 {
@@ -29,7 +29,7 @@ decode_image(const std::filesystem::path& path,
     // IMREAD_UNCHANGED preserves alpha channel if present.
     cv::Mat raw = cv::imread(path.string(), cv::IMREAD_UNCHANGED);
     if (raw.empty())
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::ImageOpenFailed,
             "Could not open or decode image.",
             path.string()});
@@ -39,13 +39,13 @@ decode_image(const std::filesystem::path& path,
     const uint32_t h = static_cast<uint32_t>(raw.rows);
 
     if (w == 0 || h == 0)
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::ImageDecodeFailed,
             "Image has zero dimensions.",
             path.string()});
 
     if (w > limits.max_width || h > limits.max_height)
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::ImageTooLarge,
             "Image dimensions exceed the configured limit.",
             "w=" + std::to_string(w) + " h=" + std::to_string(h)});
@@ -53,14 +53,14 @@ decode_image(const std::filesystem::path& path,
     // 3. Overflow-safe pixel and byte count check.
     const uint64_t pixels = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
     if (pixels > limits.max_pixels)
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::ImageTooLarge,
             "Image has too many pixels.",
             std::to_string(pixels) + " pixels"});
 
     const uint64_t decoded_bytes = pixels * 4ULL;
     if (decoded_bytes > limits.max_decoded_bytes)
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::ImageTooLarge,
             "Decoded image would exceed the memory limit.",
             std::to_string(decoded_bytes) + " bytes"});
@@ -71,7 +71,7 @@ decode_image(const std::filesystem::path& path,
 
     if (raw.depth() != CV_8U) {
         // Only 8-bit supported for MVP.
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::ImageDecodeFailed,
             "Only 8-bit per channel images are supported.",
             "depth=" + std::to_string(raw.depth())});
@@ -88,7 +88,7 @@ decode_image(const std::filesystem::path& path,
         cv::cvtColor(raw, rgba, cv::COLOR_BGRA2RGBA);
         break;
     default:
-        return std::unexpected(ImagePaintError{
+        return make_unexpected(ImagePaintError{
             ImagePaintErrorCode::ImageDecodeFailed,
             "Unsupported number of image channels.",
             "channels=" + std::to_string(channels)});

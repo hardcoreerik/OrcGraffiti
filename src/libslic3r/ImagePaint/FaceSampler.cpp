@@ -196,8 +196,8 @@ ColorRgba8 sample_bilinear(const DecodedImage& image, double u, double v)
 
 std::vector<FaceSample>
 sample_faces(
-    std::span<const Vec3f>    vertices,
-    std::span<const Vec3i32>  indices,
+    Span<const Vec3f>    vertices,
+    Span<const Vec3i32>  indices,
     const DecodedImage&        image,
     const PlanarProjectionSettings& proj,
     SamplingQuality            quality,

@@ -5,7 +5,7 @@
 
 #include "libslic3r/Point.hpp"  // Vec3d, Transform3d
 
-#include <expected>
+#include "ImagePaintCompat.hpp"
 #include <optional>
 
 namespace Slic3r::ImagePaint {
@@ -62,7 +62,7 @@ struct ProjectedPoint {
 // Build a right-handed orthonormal ProjectorFrame from an arbitrary camera
 // direction and an up hint. Returns error if the combination is degenerate
 // (direction parallel to up hint within tolerance).
-std::expected<ProjectorFrame, ImagePaintError>
+Expected<ProjectorFrame, ImagePaintError>
 make_projector_frame(const Vec3d& look_direction,
                      const Vec3d& up_hint,
                      const Vec3d& origin);

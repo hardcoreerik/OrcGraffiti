@@ -7,7 +7,7 @@
 
 #include <array>
 #include <vector>
-#include <span>
+#include "ImagePaintCompat.hpp"
 #include <functional>
 
 namespace Slic3r::ImagePaint {
@@ -36,8 +36,8 @@ struct FaceSample {
 // The cancellation callback is polled at regular intervals; returning true aborts.
 std::vector<FaceSample>
 sample_faces(
-    std::span<const Vec3f>    vertices,
-    std::span<const Vec3i32>  indices,
+    Span<const Vec3f>    vertices,
+    Span<const Vec3i32>  indices,
     const DecodedImage&        image,
     const PlanarProjectionSettings& proj,
     SamplingQuality            quality,

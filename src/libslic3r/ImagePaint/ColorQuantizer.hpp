@@ -4,7 +4,7 @@
 #include "ColorSpace.hpp"
 
 #include <vector>
-#include <span>
+#include "ImagePaintCompat.hpp"
 #include <functional>
 
 namespace Slic3r::ImagePaint {
@@ -27,7 +27,7 @@ struct ColorSample {
 // Empty clusters are removed and the result is stable-sorted by luminance.
 // Cancellation callback is polled between iterations.
 std::vector<SourceCluster>
-quantize_colors(std::span<const ColorSample> samples,
+quantize_colors(Span<const ColorSample> samples,
                 const QuantizationSettings&   settings,
                 const std::function<bool()>&  cancel = {});
 

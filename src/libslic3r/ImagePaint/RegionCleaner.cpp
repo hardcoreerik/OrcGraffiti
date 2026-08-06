@@ -51,7 +51,7 @@ find_components(const std::vector<SelectorState>& states,
 }
 
 bool is_sharp_edge(FaceIndex fi, FaceIndex nb,
-                   std::span<const Vec3d> face_normals,
+                   Span<const Vec3d> face_normals,
                    double cos_threshold)
 {
     if (fi >= face_normals.size() || nb >= face_normals.size())
@@ -66,8 +66,8 @@ std::uint32_t
 clean_tiny_regions(
     std::vector<SelectorState>&         states,
     const FaceAdjacency&                adjacency,
-    std::span<const Vec3d>              face_normals,
-    std::span<const double>             face_areas,
+    Span<const Vec3d>              face_normals,
+    Span<const double>             face_areas,
     const RegionCleanupSettings&        settings,
     const std::function<bool()>&        cancel)
 {

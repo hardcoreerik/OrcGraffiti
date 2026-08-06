@@ -11,7 +11,7 @@
 
 #include "libslic3r/Point.hpp"
 
-#include <expected>
+#include "ImagePaintCompat.hpp"
 #include <functional>
 #include <string>
 #include <vector>
@@ -63,12 +63,12 @@ struct FacePaintPlan {
 };
 
 // Run the full image-paint pipeline from a file path.
-std::expected<FacePaintPlan, ImagePaintError>
+Expected<FacePaintPlan, ImagePaintError>
 run_image_paint(const ImagePaintRequest&     request,
                 const std::function<bool()>& cancel = {});
 
 // Same pipeline but with a pre-decoded image (for preview and testing).
-std::expected<FacePaintPlan, ImagePaintError>
+Expected<FacePaintPlan, ImagePaintError>
 run_image_paint(const ImagePaintRequest&     request,
                 const DecodedImage&          image,
                 const std::function<bool()>& cancel = {});

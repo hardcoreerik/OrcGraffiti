@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
-#include <span>
+#include "ImagePaintCompat.hpp"
 #include <vector>
 
 namespace Slic3r {
@@ -32,8 +32,8 @@ struct TopologyFingerprint {
 // vertices: flat array of (x, y, z) floats, length = vertex_count * 3
 // indices:  flat array of (i0, i1, i2) int32, length = triangle_count * 3
 TopologyFingerprint fingerprint_from_arrays(
-    std::span<const float>   vertices,
-    std::span<const int32_t> indices);
+    Span<const float>   vertices,
+    Span<const int32_t> indices);
 
 // Convenience overload for TriangleMesh (reads shared snapshot — thread-safe read).
 TopologyFingerprint fingerprint(const TriangleMesh& mesh);

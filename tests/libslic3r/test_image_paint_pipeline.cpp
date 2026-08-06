@@ -3,6 +3,9 @@
 
 #include "libslic3r/ImagePaint/ImagePaintPipeline.hpp"
 #include "libslic3r/ImagePaint/PaintStateMerge.hpp"
+#include "libslic3r/ImagePaint/Projection.hpp"
+
+#include <filesystem>
 
 using namespace Slic3r;
 using namespace Slic3r::ImagePaint;
@@ -210,6 +213,122 @@ TEST_CASE("run_image_paint fingerprint is deterministic", "[ImagePaint][Pipeline
     REQUIRE(r1.has_value());
     REQUIRE(r2.has_value());
     CHECK(r1->fingerprint == r2->fingerprint);
+}
+
+TEST_CASE("run_image_paint real file with fit paints front of plate", "[ImagePaint][Pipeline][Integration]")
+{
+    // Prefer local copy (build dir) then the user sample path.
+    namespace fs = std::filesystem;
+    fs::path sample = "F:/Ai/OrcGraffiti/build/garth.jpg";
+    if (!fs::exists(sample))
+        sample = "C:/Users/hardc/OneDrive/Pictures/garth.jpg";
+    if (!fs::exists(sample)) {
+        SKIP("Sample image garth.jpg not present — skipping integration test");
+    }
+
+    // Flat plate in XY at z=0 (10 triangles), 100mm x 100mm — faces +Z.
+    std::vector<Vec3f> verts = {
+        {0,0,0},{100,0,0},{100,100,0},{0,100,0},
+        {0,0,5},{100,0,5},{100,100,5},{0,100,5},
+    };
+    // Top (+Z) and bottom (-Z) only — 4 tris top, 4 bottom.
+    std::vector<Vec3i32> idxs = {
+        {4,5,6},{4,6,7},   // top
+        {0,2,1},{0,3,2},   // bottom (inward for -Z? outward: 0,1,2 / 0,2,3)
+        {0,1,2},{0,2,3},
+    };
+    // Fix bottom winding for outward -Z
+    idxs[2] = {0,2,1};
+    idxs[3] = {0,3,2};
+    // Actually use clean 4 tris:
+    idxs = {
+        {4,5,6},{4,6,7}, // top +Z
+        {0,3,2},{0,2,1}, // bottom -Z
+    };
+
+    ImagePaintRequest req;
+    req.vertices = verts;
+    req.indices  = idxs;
+    req.image_path = sample.string();
+    req.filaments = one_red_filament();
+    // Add a second filament so multi-color matching has room
+    {
+        FilamentColor f;
+        f.project_index = 1;
+        f.name = "Black";
+        f.display_rgb = {20, 20, 20};
+        req.filaments.push_back(f);
+        FilamentColor f2;
+        f2.project_index = 2;
+        f2.name = "White";
+        f2.display_rgb = {240, 240, 240};
+        req.filaments.push_back(f2);
+        FilamentColor f3;
+        f3.project_index = 3;
+        f3.name = "Skin";
+        f3.display_rgb = {200, 160, 120};
+        req.filaments.push_back(f3);
+    }
+    req.quantization.target_colors = 4;
+    req.quality = SamplingQuality::Gaussian7;
+    req.merge_policy = MergePolicy::OverwriteInsideMask;
+    req.cleanup.enabled = true;
+
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>(verts.data(), verts.size()),
+        Vec3d(0, 0, -1),
+        Vec3d(0, 1, 0),
+        692.0 / 994.0,  // garth aspect
+        1.02);
+    REQUIRE(fitted.has_value());
+    req.projection = *fitted;
+    req.projection.front_face_cosine_threshold = 0.05;
+    req.projection.minimum_coverage = 0.25;
+
+    const auto result = run_image_paint(req);
+    if (!result.has_value()) {
+        FAIL("run_image_paint failed: " + result.error().user_message
+             + " code=" + std::to_string(static_cast<int>(result.error().code)));
+    }
+    // Top faces should paint; bottom should not.
+    CHECK(result->states[0] != kStateNone);
+    CHECK(result->states[1] != kStateNone);
+    CHECK(result->states[2] == kStateNone);
+    CHECK(result->states[3] == kStateNone);
+    CHECK(result->diagnostics.painted_faces >= 2);
+}
+
+TEST_CASE("run_image_paint fit_planar_projection front view paints front faces", "[ImagePaint][Pipeline]")
+{
+    // Simulate the gizmo path: fit projector from a front camera (+Y look)
+    // onto the unit cube, then run the pipeline. Front faces are indices 4-5.
+    auto req = base_request();
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
+        Vec3d(0, 1, 0),   // look toward +Y (camera at -Y facing the front face)
+        Vec3d(0, 0, 1),   // up = +Z
+        /*aspect=*/1.0,
+        /*margin=*/1.02);
+    REQUIRE(fitted.has_value());
+    req.projection = *fitted;
+    req.projection.front_face_cosine_threshold = 0.05;
+    req.projection.minimum_coverage = 0.25;
+
+    const auto image = make_solid_image(32, 32, 0, 255, 0);  // solid green
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+
+    // Front faces (y=0, normal -Y): look is +Y so -normal·look... front_facing uses
+    // n.dot(-proj.normal); front normal = (0,-1,0), -normal = (0,1,0), look/normal = (0,1,0)
+    // → dot = 1 → front faces painted.
+    CHECK(result->states[4] == kStateExtruderMin);
+    CHECK(result->states[5] == kStateExtruderMin);
+
+    // Back faces (y=1, normal +Y) should remain unpainted.
+    CHECK(result->states[6] == kStateNone);
+    CHECK(result->states[7] == kStateNone);
+
+    CHECK(result->diagnostics.painted_faces >= 2);
 }
 
 // ---------------------------------------------------------------------------

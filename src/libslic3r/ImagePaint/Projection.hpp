@@ -62,10 +62,32 @@ struct ProjectedPoint {
 // Build a right-handed orthonormal ProjectorFrame from an arbitrary camera
 // direction and an up hint. Returns error if the combination is degenerate
 // (direction parallel to up hint within tolerance).
+//
+// Coordinate space: look_direction, up_hint, and origin must share one space
+// (mesh-local, object, or world). The returned frame is in that same space.
 Expected<ProjectorFrame, ImagePaintError>
 make_projector_frame(const Vec3d& look_direction,
                      const Vec3d& up_hint,
                      const Vec3d& origin);
+
+// Fit a planar projector so the image plane covers all mesh vertices when
+// viewed along look_direction (same coordinate space as vertices).
+//
+// image_aspect_w_over_h:
+//   > 0  — expand width or height so plane aspect matches the image
+//          (avoids stretching the source image onto the mesh)
+//   <= 0 — use the natural projected mesh extent (may stretch the image)
+//
+// margin: scale factor applied to both dimensions (1.02 = 2% pad).
+//
+// Resulting PlanarProjectionSettings has frame, width_mm, height_mm set;
+// other fields keep PlanarProjectionSettings defaults.
+Expected<PlanarProjectionSettings, ImagePaintError>
+fit_planar_projection(Span<const Vec3f> vertices,
+                      const Vec3d&      look_direction,
+                      const Vec3d&      up_hint,
+                      double            image_aspect_w_over_h = 0.0,
+                      double            margin = 1.02);
 
 // Project a single point from the coordinate space of the ProjectorFrame.
 // p must already be in the same space as frame.origin/axes.

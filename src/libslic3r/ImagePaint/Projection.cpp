@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cassert>
+#include <limits>
 
 namespace Slic3r::ImagePaint {
 
@@ -37,6 +38,79 @@ make_projector_frame(const Vec3d& look_direction,
     frame.axis_v = up;
     frame.normal = fwd;
     return frame;
+}
+
+Expected<PlanarProjectionSettings, ImagePaintError>
+fit_planar_projection(Span<const Vec3f> vertices,
+                      const Vec3d&      look_direction,
+                      const Vec3d&      up_hint,
+                      double            image_aspect_w_over_h,
+                      double            margin)
+{
+    if (vertices.empty())
+        return make_unexpected(ImagePaintError{
+            ImagePaintErrorCode::NoEligibleFaces,
+            "Cannot fit projection: mesh has no vertices."});
+
+    if (!(margin > 0.0) || !std::isfinite(margin))
+        margin = 1.02;
+
+    // Build orthonormal axes (origin filled in after extent scan).
+    auto axes = make_projector_frame(look_direction, up_hint, Vec3d::Zero());
+    if (!axes)
+        return make_unexpected(axes.error());
+
+    const Vec3d& axis_u = axes->axis_u;
+    const Vec3d& axis_v = axes->axis_v;
+    const Vec3d& normal = axes->normal;
+
+    double min_u =  std::numeric_limits<double>::infinity();
+    double max_u = -std::numeric_limits<double>::infinity();
+    double min_v =  std::numeric_limits<double>::infinity();
+    double max_v = -std::numeric_limits<double>::infinity();
+    double min_n =  std::numeric_limits<double>::infinity();
+    double max_n = -std::numeric_limits<double>::infinity();
+
+    for (const Vec3f& vf : vertices) {
+        const Vec3d p = vf.cast<double>();
+        const double u = p.dot(axis_u);
+        const double v = p.dot(axis_v);
+        const double n = p.dot(normal);
+        min_u = std::min(min_u, u); max_u = std::max(max_u, u);
+        min_v = std::min(min_v, v); max_v = std::max(max_v, v);
+        min_n = std::min(min_n, n); max_n = std::max(max_n, n);
+    }
+
+    double extent_u = std::max(max_u - min_u, 1e-6);
+    double extent_v = std::max(max_v - min_v, 1e-6);
+
+    // Preserve source image aspect by expanding the smaller plane dimension so
+    // the mesh is still fully covered (letterbox the mesh into the image plane).
+    if (image_aspect_w_over_h > 1e-9 && std::isfinite(image_aspect_w_over_h)) {
+        const double mesh_aspect = extent_u / extent_v;
+        if (image_aspect_w_over_h > mesh_aspect)
+            extent_u = extent_v * image_aspect_w_over_h;
+        else
+            extent_v = extent_u / image_aspect_w_over_h;
+    }
+
+    extent_u *= margin;
+    extent_v *= margin;
+
+    const double mid_u = 0.5 * (min_u + max_u);
+    const double mid_v = 0.5 * (min_v + max_v);
+    // Place the projector plane on the camera side of the mesh (smaller depth
+    // along look/normal), slightly in front so depth is positive into the mesh.
+    const double plane_n = min_n - 1.0;
+
+    PlanarProjectionSettings s;
+    s.frame.origin = axis_u * mid_u + axis_v * mid_v + normal * plane_n;
+    s.frame.axis_u = axis_u;
+    s.frame.axis_v = axis_v;
+    s.frame.normal = normal;
+    s.width_mm  = extent_u;
+    s.height_mm = extent_v;
+    return s;
 }
 
 std::pair<double,double> apply_rotation_mirror(double u, double v,

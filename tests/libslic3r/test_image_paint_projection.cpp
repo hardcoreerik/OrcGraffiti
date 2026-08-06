@@ -195,6 +195,68 @@ TEST_CASE("sample_bilinear out-of-bounds returns transparent black", "[ImagePain
 }
 
 // ---------------------------------------------------------------------------
+// fit_planar_projection
+// ---------------------------------------------------------------------------
+
+TEST_CASE("fit_planar_projection covers unit cube from top", "[ImagePaint][Projection]")
+{
+    // Unit cube [0,1]^3 vertices.
+    const std::vector<Vec3f> verts = {
+        {0,0,0},{1,0,0},{1,1,0},{0,1,0},
+        {0,0,1},{1,0,1},{1,1,1},{0,1,1},
+    };
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>(verts.data(), verts.size()),
+        Vec3d(0, 0, -1),  // look -Z (top-down)
+        Vec3d(0, 1, 0),
+        /*aspect=*/0.0,
+        /*margin=*/1.0);
+    REQUIRE(fitted.has_value());
+    CHECK_THAT(fitted->width_mm,  WithinAbs(1.0, 1e-6));
+    CHECK_THAT(fitted->height_mm, WithinAbs(1.0, 1e-6));
+
+    // All 8 corners must project inside [0,1].
+    for (const auto& v : verts) {
+        const auto pp = project_planar(v.cast<double>(), *fitted);
+        CHECK(pp.u >= -1e-9);
+        CHECK(pp.u <= 1.0 + 1e-9);
+        CHECK(pp.v >= -1e-9);
+        CHECK(pp.v <= 1.0 + 1e-9);
+        CHECK(pp.inside);
+    }
+}
+
+TEST_CASE("fit_planar_projection preserves image aspect by expanding plane", "[ImagePaint][Projection]")
+{
+    // Thin strip 10 x 2 in XY, look -Z.
+    const std::vector<Vec3f> verts = {
+        {0,0,0},{10,0,0},{10,2,0},{0,2,0},
+    };
+    // Portrait image 1:2 → plane should expand height to 20 when width fixed at 10.
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>(verts.data(), verts.size()),
+        Vec3d(0, 0, -1),
+        Vec3d(0, 1, 0),
+        /*aspect=*/0.5,   // w/h = 0.5 → height = width/0.5
+        /*margin=*/1.0);
+    REQUIRE(fitted.has_value());
+    // Mesh extent_u=10, extent_v=2, mesh_aspect=5 > 0.5 → expand v: extent_v = 10/0.5 = 20
+    CHECK_THAT(fitted->width_mm,  WithinAbs(10.0, 1e-6));
+    CHECK_THAT(fitted->height_mm, WithinAbs(20.0, 1e-6));
+    CHECK_THAT(fitted->width_mm / fitted->height_mm, WithinAbs(0.5, 1e-6));
+}
+
+TEST_CASE("fit_planar_projection empty mesh returns error", "[ImagePaint][Projection]")
+{
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>{},
+        Vec3d(0, 0, -1),
+        Vec3d(0, 1, 0));
+    REQUIRE(!fitted.has_value());
+    CHECK(fitted.error().code == ImagePaintErrorCode::NoEligibleFaces);
+}
+
+// ---------------------------------------------------------------------------
 // Gaussian7 weight invariant
 // ---------------------------------------------------------------------------
 

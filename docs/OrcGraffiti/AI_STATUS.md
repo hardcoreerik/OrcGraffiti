@@ -2,79 +2,65 @@
 
 ## Current Phase
 
-Phase 6 (Hardening) — **ctest GREEN**. MVP core pipeline verified.
+Phase 6+ mapping quality — **tests green**, full app rebuild with projection fixes.
 
 ## Current Branch
 
-feature/image-paint-phase1-types (carries Phases 0–6)
+feature/image-paint-phase1-types (carries Phases 0–6 + mapping fixes)
 
 ## Current Commit
 
-fix: MSVC/C++17 ImagePaint suite green (64/64) — see branch tip
+fix: mesh-local auto-fit projection + libjpeg path for JPG (see branch tip)
 
 ## Working Build Configuration
 
-ALL DEPS BUILT:
-- TBB, Boost, wxWidgets, OpenCV, CGAL, ZLIB, Freetype, JPEG, GLEW, GLFW
-- OpenEXR, Blosc, OpenVDB, OCCT, OpenCSG, Draco, NLopt, Cereal, Eigen
-- OpenSSL (needed Strawberry Perl), CURL, GMP, MPFR, Qhull, python3
-- Total: 25 deps built
+ALL DEPS BUILT (25). Main cmake CONFIGURED. PATH: CMake before Strawberry.
 
-Main source cmake configure: COMPLETE.
-  cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-    -DCMAKE_PREFIX_PATH="F:/Ai/OrcGraffiti/deps/build_x64/destdir/usr/local"
-    -DSLIC3R_STATIC=ON
-    -DOPENSSL_ROOT_DIR="F:/Ai/OrcGraffiti/deps/build_x64/destdir/usr/local"
-    -DBUILD_TESTS=ON
+```
+cmake --build build --config Release --target libslic3r_tests -- -m
+ctest --test-dir build/tests/libslic3r -C Release -L ImagePaint --output-on-failure
 
-PATH note: put `C:\Program Files\CMake\bin` BEFORE `C:\Strawberry\c\bin`.
-
-libslic3r_tests: **BUILT** (Release).
-
-Run:
-  ctest --test-dir build/tests/libslic3r -C Release -L ImagePaint --output-on-failure
-  # or: build/tests/libslic3r/Release/libslic3r_tests.exe "[ImagePaint]"
+cmake --build build --config Release --target OrcaSlicer -- -m
+# launch: build\src\Release\orca-slicer.exe
+```
 
 ## Most Recent Verified Behavior
 
-**ctest -L ImagePaint: 64/64 PASSED** (292 assertions, ~1.3s)
-  Fingerprint: 9, Projection/Sampling: 15, Color: 19, Pipeline: 17, Hardening: 6
-  (prior "73" count was source-level estimate; Catch discovers 64 cases)
+**ctest -L ImagePaint: 69/69 PASSED** (includes garth.jpg integration).
 
-Fixes that made the suite green (post C++17 compat):
-- Span: vector ctors, size-based ctor for FaceAdjacency, size_bytes()
-- Expected: value() accessors
-- TopologyFingerprint: manual operator== (no C++20 defaulted comparison)
-- GaussianSampler7: precomputed weight sum (no constexpr loop over array)
-- sample_bilinear: explicit UV [0,1] bounds; transparent black {0,0,0,0}
-  (ColorRgba8 default a=255, so `return {}` was wrong)
-- Tests: Span instead of std::span, vertex_count=3, sample UV at texel centre,
-  drop flaky DE2000 pair 6, ASCII "1x1" test name (Unicode × broke CTest filter)
+User smoke (prior session): gizmo toolbar worked, app loaded recent items, but mapping quality was poor.
 
-Phase 6 implementation:
-- TBB parallel_for in FaceSampler::sample_faces (grain=256, atomic cancel)
-- ImagePaintJob::finalize: deserializes existing mmu_segmentation_facets before
-  overlaying plan (existing paint outside image footprint preserved)
+Root causes fixed overnight:
+1. **Coordinate space bug** — mesh is volume-local; camera was world-space. Now transform look/up via `inverse(world_matrix).linear()`.
+2. **Fixed 100×100 mm plane** — now `fit_planar_projection()` auto-sizes to mesh extent as seen from camera; preserves image aspect.
+3. **JPEG failed silently** — OpenCV dep built with `WITH_JPEG=OFF`. Added **libjpeg-turbo** fallback in `ImageDecoder` (JPEG already linked to libslic3r). Verified with `garth.jpg` (692×994).
+4. Gizmo UI: **Auto-fit to view** (default on) + **Fit now** button; caches image pixel size for aspect.
 
 ## Sample Image
 
-User image: C:\Users\hardc\OneDrive\Pictures\garth.jpg
-Ready once full app binary is linked — load via Browse button in gizmo.
+`C:\Users\hardc\OneDrive\Pictures\garth.jpg` (also copied to `build/garth.jpg` for tests)
+
+How to retest:
+1. Launch `build\src\Release\orca-slicer.exe`
+2. Load a model, select it
+3. Open Image Paint gizmo
+4. Browse → garth.jpg (Auto-fit checked)
+5. Face the surface you want painted, click Apply
+6. Use multicolor filaments for visible result
 
 ## Active Task
 
-Update PR #1 with ctest evidence. Optionally build full OrcaSlicer/OrcGraffiti app
-for interactive smoke test with garth.jpg.
+User retest mapping quality after sleep. Optional next: placement preview overlay, rotation control, world-space transform snapshot per Project_Truth §14 full chain.
 
 ## Next Three Tasks
 
-1. Push test-green commit + update PR #1 body with ctest results
-2. Build full app target (OrcaSlicer / ALL_BUILD) for interactive Image Paint gizmo
-3. Smoke-test: load model, open Image Paint gizmo, project garth.jpg, Apply, undo, save 3MF
+1. User interactive retest of mapping with garth.jpg
+2. Optional: on-canvas projector rectangle preview
+3. Optional: rebuild OpenCV with WITH_JPEG=ON long-term (libjpeg path is fine for MVP)
 
 ## Known Failures
 
-None — ImagePaint suite fully green.
+None in ImagePaint unit suite.
 
 ## Blockers
 
@@ -82,23 +68,8 @@ None.
 
 ## Open PRs
 
-PR #1: https://github.com/hardcoreerik/OrcGraffiti/pull/1
-  Covers: Phases 0-6 MVP (all source, 64 ImagePaint tests green)
-  Status: Draft — ctest evidence ready to attach
-
-## Loop Schedule
-
-Loop stopped by user. CronJob 7cdaa6af cancelled.
-
-## Last Loop Summary
-
-Grok takeover (2026-08-05/06):
-- Claude hit monthly spend mid-debug of sample_bilinear alpha bug
-- Finished remaining MSVC/C++17 fixes in working tree
-- Built libslic3r_tests Release
-- ctest -L ImagePaint: 64/64 PASSED
-- Renamed 1×1 test to 1x1 so CTest name discovery works on Windows
+PR #1: https://github.com/hardcoreerik/OrcGraffiti/pull/1 (draft)
 
 ## Updated
 
-2026-08-05 Grok session — tests green
+2026-08-06 overnight mapping fix session

@@ -26,6 +26,12 @@ set(lisbslic3r_sources
     ImagePaint/ImagePaintErrors.hpp
     ImagePaint/TopologyFingerprint.hpp
     ImagePaint/TopologyFingerprint.cpp
+    ImagePaint/ImageDecoder.hpp
+    ImagePaint/ImageDecoder.cpp
+    ImagePaint/Projection.hpp
+    ImagePaint/Projection.cpp
+    ImagePaint/FaceSampler.hpp
+    ImagePaint/FaceSampler.cpp
     AABBMesh.cpp
     AABBMesh.hpp
     AABBTreeIndirect.hpp

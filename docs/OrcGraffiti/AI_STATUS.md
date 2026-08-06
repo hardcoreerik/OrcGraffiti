@@ -2,55 +2,66 @@
 
 ## Current Phase
 
-Phase 3 complete (code). Phase 4 — Apply/Undo/3MF is next.
+Phase 4 complete (code). Phase 5 — Interactive Gizmo is next.
 
 ## Current Branch
 
-feature/image-paint-phase1-types (carries Phases 0–3)
+feature/image-paint-phase1-types (carries Phases 0–4)
 
 ## Current Commit
 
-dd9c45ec5c feat: Phase 3 — color pipeline, CIEDE2000, quantizer, matcher, adjacency, cleanup
+2e28de6845 feat: Phase 4 — PaintStateMerge, ImagePaintPipeline, 11 pipeline tests
 
 ## Working Build Configuration
 
-Dep build STARTED in background (PID 44160), logging to devlogs/OrcGraffiti/deps_build.log.
+Dep build RUNNING in background.
 cmake -S deps -B deps/build_x64 -G "Visual Studio 17 2022" -A x64 succeeded.
 cmake --build deps/build_x64 --config Release -j 8 running (~30-60 min).
+Log: devlogs/OrcGraffiti/deps_build.log
 
 ## Most Recent Verified Behavior
 
-SOURCE ONLY — build running in background. Files implement end-to-end headless pipeline pieces:
-- TopologyFingerprint (Phase 1): FNV-1a-64 deterministic mesh identity
-- ImageDecoder (Phase 2): bounded OpenCV decode
-- Projection + FaceSampler (Phase 2): planar UV mapping + Gaussian7 sampling
-- ColorSpace + ColorDifference (Phase 3): sRGB->Lab, CIEDE2000
-- ColorQuantizer (Phase 3): median-cut k-means
-- FilamentMatcher (Phase 3): CENTRAL index conversion + CIEDE2000 matching
-- FaceAdjacency + RegionCleaner (Phase 3): adjacency CSR + tiny-region merge
+SOURCE ONLY — 66 unit tests written, build still running.
 
-55 unit tests written across 3 test files.
-Draft PR #1 opened: https://github.com/hardcoreerik/OrcGraffiti/pull/1
+Phase 4 pipeline: ImagePaintRequest -> FacePaintPlan end-to-end headless.
+Stages: decode -> fingerprint -> geometry -> sample -> quantize -> match -> assign -> clean -> merge.
+Merge policies: PreserveExisting (paint only kStateNone faces), OverwriteInsideMask.
+Golden-cube integration tests: solid-colour image, transparent image, PreserveExisting,
+diagnostics, determinism, error cases (empty mesh, no filaments).
+
+## Sample Image
+
+User image: C:\Users\hardc\OneDrive\Pictures\garth.jpg
+Will be wired into the Phase 5 gizmo file-picker (image_path in ImagePaintRequest).
 
 ## Active Task
 
-Implement Phase 4: PaintStateMerge, ImagePaintPipeline, Apply/Undo helpers.
-Then check dep build progress and attempt main build.
+Phase 5 — Interactive Gizmo:
+  GLGizmoImagePainter (renders placement handles + preview overlay)
+  ImagePaintController (coordinates background job + Apply)
+  ImagePaintJob (worker: wraps run_image_paint, posts FacePaintPlan to UI thread)
 
 ## Next Three Tasks
 
-1. PaintStateMerge.hpp/.cpp — merge policies (PreserveExisting, PaintOnlyUnpainted, OverwriteInsideMask)
-2. ImagePaintPipeline.hpp/.cpp — end-to-end headless pipeline (request -> plan)
-3. test_image_paint_pipeline.cpp — headless golden cube projection test
+1. ImagePaintJob.hpp/.cpp — background worker that calls run_image_paint
+2. ImagePaintController.hpp/.cpp — state machine: Idle -> Projecting -> Applied
+3. GLGizmoImagePainter.hpp — gizmo scaffold (Phase 5 day 1, GUI code allowed here)
 
 ## Known Failures
 
 Build not yet complete — dep build running in background.
+Tests are source-only pending build completion.
 
 ## Blockers
 
-Dep build in progress. Once complete, main source build can be attempted.
-Log: devlogs/OrcGraffiti/deps_build.log
+Dep build in progress. Once complete, attempt main source build.
+ctest --test-dir build/tests -C Release -R image_paint --output-on-failure
+
+## Open PRs
+
+PR #1: https://github.com/hardcoreerik/OrcGraffiti/pull/1
+  Covers: Phases 0-4 (all source, 66 tests)
+  Status: Draft, build pending
 
 ## Loop Schedule
 
@@ -58,13 +69,13 @@ CronJob 7cdaa6af — fires every 30 min at :03 and :33 past the hour.
 
 ## Last Loop Summary
 
-Loop 3 (2026-08-05):
-- Implemented full Phase 3 color pipeline (6 new source file pairs)
-- 26 new unit tests (CIEDE2000 reference pairs, quantizer, index conversion, adjacency)
-- Draft PR #1 opened on hardcoreerik/OrcGraffiti
-- Dep build cmake configure succeeded; build started in background
-- 55 total unit tests written across Phases 1-3
+Loop 4 (2026-08-05):
+- Implemented Phase 4: PaintStateMerge (merge policies) + ImagePaintPipeline (end-to-end)
+- 11 new unit tests (4 merge-policy + 7 golden-cube integration)
+- 66 total unit tests across 4 files (Phases 1-4)
+- Updated PR #1 to cover Phases 0-4
+- Pushed to origin: feature/image-paint-phase1-types
 
 ## Updated
 
-2026-08-05 Loop 3
+2026-08-05 Loop 4

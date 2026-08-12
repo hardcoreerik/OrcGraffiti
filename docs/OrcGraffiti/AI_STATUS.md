@@ -2,7 +2,9 @@
 
 ## Current Phase
 
-Phase 6+ mapping quality green. **Agent Surface AS-1 through AS-4 implemented and tested.**
+Phase 6+ mapping quality green. **Agent Surface AS-1/AS-2/AS-4 implemented
+and tested; AS-3 write path (`paint --out`) DISABLED — confirmed broken
+against real slicer software twice.**
 Phase 7 (cylindrical/spherical projection) math complete for both projections.
 
 ## Current Branch
@@ -23,88 +25,98 @@ feature/image-paint-phase1-types
 
 - ImagePaint unit tests: **86/86** (412 assertions; cylindrical + spherical projection, 17 new)
 - Full app: Release `orca-slicer.exe` builds
-- `orcgraffiti.exe`: `version`, `help`, `info`, `paint --dry-run`, `paint --out` — links libslic3r only
-- ctest: **24/24 green** (15 ImagePaint core + 9 orcgraffiti CLI contract tests)
+- `orcgraffiti.exe`: `version`, `help`, `info`, `paint --dry-run` — links libslic3r only. **`paint --out` is disabled**, refuses with a clear error.
+- ctest: **23/23 green** (15 ImagePaint core + 8 orcgraffiti CLI contract tests)
 - Sample image: `C:\Users\hardc\OneDrive\Pictures\garth.jpg`
 
-## ⚠️ AS-3 write path: CRASH FOUND AND FIXED — re-verification needed before trusting again
+## ⛔ AS-3 write path: DISABLED — two fix attempts each confirmed broken by real testing
 
-`paint --out` produced a file that **crashed the user's OrcaSlicer 2.4.2
-and FlashForge Studio on open**, reported directly after they tested
-`gui_check_bbs_v2.3mf`. Root cause found and a fix has been built and
-tested by this CLI's own tooling — **but the fix has NOT yet been
-re-verified by a human opening a file in real slicer software.** Do not
-generate and hand off another `--out` file without explicit user
-permission — they already hit one crash from this feature.
+`paint --out` is **deliberately disabled** as of 2026-08-11. Do not
+re-enable it without either (a) a fix that's actually been verified
+against real slicer software, not just this CLI's own tooling, or (b) a
+materially different approach. Read the full chronology below before
+attempting either — the two bugs already found and fixed were real, but
+clearly not the only structural problems.
 
-### The crash and its fix (2026-08-11)
-
-`_BBS_3MF_Exporter::_add_relationships_file_to_archive` (`bbs_3mf.cpp:6750`)
-unconditionally writes `_rels/.rels` entries referencing
-`Metadata/plate_1.png` and `Metadata/plate_1_small.png` whenever no
-thumbnail path was set in its internal `PackingTemporaryData` — it does
-NOT skip the relationship when there's no file to back it. Since
-`orcgraffiti` never supplied `StoreParams::thumbnail_data`, the written
-archive had `Relationship` entries pointing at files that were never
-actually written into the zip — a dangling OPC package reference.
-Confirmed via direct zip inspection (Python `zipfile`): the crashing
-file's `namelist()` had no `plate_1*.png` despite `_rels/.rels`
-referencing them by exact path.
-
-**Fix:** populate `StoreParams::thumbnail_data` with a minimal valid
-16×16 white `ThumbnailData` before calling `store_bbs_3mf`.
-`_add_thumbnail_file_to_archive` (miniz-based PNG encoder, no wx/GUI
-dependency) then actually writes `Metadata/plate_1.png` and an
-auto-generated `_small.png` companion, so every relationship target
-exists. Re-inspected the written zip after the fix: both PNGs present
-with valid signatures (87 and 143 bytes respectively), all 4 relationship
-entries resolve to real files. `has_mmu_paint` round-trip and 24/24 ctest
-still pass.
-
-**What this fix does NOT prove:** that the file no longer crashes real
-slicer software. This CLI's own reader/writer pair agreeing with each
-other was also true of the *previous, crashing* version — self-consistency
-is not the same as external validity. The next step is asking the user if
-they're willing to test again, not assuming this is resolved.
-
-### AS-3 bug history (2026-08-11, full chronology — read before touching the writer again)
+### AS-3 bug history (2026-08-11, full chronology)
 
 1. **Fixed — `LoadStrategy` bug**, pre-existing since AS-1, affects any
    `.3mf` input: default `LoadStrategy` omits `LoadModel`/`LoadConfig`.
-   Fixed via `full_load_strategy()`.
+   Fixed via `full_load_strategy()`. *(This fix is fine and stays — it's
+   about reading, unrelated to the write-path crashes below.)*
 2. **First BBS-writer attempt: reverted.** Empty `<plate>` element for
    non-3MF inputs → reload saw zero objects. Fixed by synthesizing a
    default `PlateData`. Reload then failed differently (`obj_map` lookup)
    — root cause not isolated at the time; reverted.
 3. **Scope narrowed to plain `store_3mf` (v1).** Verified geometry/
    fingerprint round-trip, but the user's GUI check failed: "just a cube,"
-   mislabeled as Bambu Studio.
+   mislabeled as Bambu Studio — paint wasn't recognized.
 4. **User provided a real reference 3MF** to diff against (a personal
-   file, not committed to the repo). Found the actual root cause: the
+   file, not committed to the repo). Found a real root cause: the
    exporter only writes `<assemble_item>` for instances with an
-   initialized assemble transform.
-5. **Fixed and self-verified** — `has_mmu_paint: true` round-trip. Sent
+   initialized assemble transform. Fixed.
+5. **Self-verified** (`has_mmu_paint: true` round-trip) and sent
    `gui_check_bbs_v2.3mf` to the user.
 6. **User's GUI check: CRASH** in both OrcaSlicer 2.4.2 and FlashForge
-   Studio. Immediately reverted the "this is fixed" framing and
-   investigated rather than sending a third blind attempt.
-7. **Found and fixed the dangling-thumbnail-relationship bug** (this
-   entry) — see above. **Not yet re-verified by a human.**
+   Studio.
+7. **Found a second real bug**: `_add_relationships_file_to_archive`
+   (`bbs_3mf.cpp:6750`) unconditionally references
+   `Metadata/plate_1.png`/`plate_1_small.png` in `_rels/.rels` even when
+   no thumbnail was ever written — a dangling OPC package reference,
+   confirmed via direct zip inspection (the crashing file's `namelist()`
+   had no such PNGs). Fixed by supplying a minimal placeholder
+   `ThumbnailData` so the referenced files actually get written.
+8. **Self-verified again** (zip inspection confirmed all relationship
+   targets now resolve to real files) and sent `gui_check_bbs_v3_fixed.3mf`
+   to the user, explicitly asking permission first this time.
+9. **User's GUI check: STILL BROKEN.** "no that didnt fix it. it stay
+   stuck on this screen" — FlashForge Studio hung indefinitely on a
+   "Loading..." dialog (screenshot evidence), rather than crashing
+   outright. Different failure mode, same underlying conclusion: not safe.
+10. **Disabled `--out` entirely** rather than attempt a third blind fix.
+    The pattern across steps 5-9 is the core lesson: this CLI's own
+    self-consistency checks (round-trip `has_mmu_paint`, matching
+    fingerprints, zip structural inspection) are *necessary* but were
+    proven, twice, **not sufficient** evidence that a written file is safe
+    to hand to real software. A third attempt without a fundamentally
+    different verification method (not just another guess-and-check
+    cycle) would be repeating the same mistake.
 
-**Still unverified beyond the crash-fix status above:** only tested
-against a single-object, single-instance, single-volume model
-(`unit_cube.stl`). Multi-object/instance/plate inputs are unexplored.
+### What's confirmed to actually work
+
+- Mesh geometry and topology fingerprint round-trip exactly through the
+  (disabled) write path — verified structurally, unaffected by the crash/
+  hang bugs, which were both about package-level metadata, not the mesh
+  itself.
+- Reading `.3mf` files (`info`, `paint --dry-run`) works correctly,
+  including the `LoadStrategy` fix — this is unrelated to the write-path
+  problems and has no open questions.
+
+### If revisiting AS-3's write path in the future
+
+Consider a fundamentally different verification approach before another
+attempt — e.g., requiring an actual human GUI test as part of the
+acceptance criteria for any fix (not optional, not "self-check passed so
+it's probably fine"), or investigating whether the underlying
+`store_bbs_3mf`/`_BBS_3MF_Exporter` machinery is even reliably usable
+from a freshly-constructed `Model` with no real `Plater`/`PartPlateList`
+lifecycle behind it — both bugs found were in package-level metadata that
+in the GUI's normal flow is populated by live application state
+(`PartPlateList::store_to_3mf_structure`, real thumbnail rendering) that
+a headless CLI has no equivalent for. There may be more such gaps.
 
 ## Next Three Tasks
 
-1. **Ask the user if they're willing to test the crash fix** — do not
-   generate and hand off a file without that explicit go-ahead. If they
-   decline, leave AS-3 documented as "self-consistent but not
-   human-verified" rather than claiming it works.
-2. If confirmed working: AS-3 is genuinely done; consider AS-5.
-3. Otherwise: continue Phase 7 — both cylindrical and spherical projection
-   math are landed and tested; next is wiring either into
-   `FaceSampler`/`ImagePaintPipeline`, or occlusion (same roadmap section).
+1. Phase 7: cylindrical and spherical projection math are landed and
+   tested (17 tests, `Projection.{hpp,cpp}`); next is wiring either into
+   `FaceSampler`/`ImagePaintPipeline` (bigger, touches tested surface), or
+   occlusion (same roadmap section, less specified — needs design work
+   before blind implementation).
+2. AS-5 (MCP thin wrap) remains blocked behind AS-3 per Roadmap.md §20's
+   own gate rule ("Do not implement AS-5 before AS-3") — and AS-3 is now
+   explicitly disabled, not just unverified, so this is further blocked
+   than before.
+3. Keep PR #1 updated; GUI retest auto-fit paint with garth.jpg when convenient.
 
 ## Open PRs
 
@@ -112,13 +124,15 @@ https://github.com/hardcoreerik/OrcGraffiti/pull/1
 
 ## Updated
 
-2026-08-11 — **AS-3 crash found and fixed**: a file `paint --out` wrote
-crashed the user's OrcaSlicer 2.4.2 and FlashForge Studio (dangling 3MF
-package relationships referencing thumbnail files that were never
-written). Fixed by supplying a minimal placeholder thumbnail so every
-relationship target exists. Human re-verification still needed before
-trusting this — see the warning banner above. Also landed Phase 7's
-cylindrical AND spherical projection math (17 new tests, 86/86 passing),
-not yet wired into the sampling pipeline. AS-4 (skill file) and the
-`LoadStrategy` fix landed earlier this session; v0.1.0-alpha tagged and
-released on GitHub.
+2026-08-11 — **AS-3 `paint --out` disabled** after a second fix attempt
+was also confirmed broken by direct human testing (FlashForge Studio hung
+indefinitely, after the first attempt crashed both OrcaSlicer 2.4.2 and
+FlashForge Studio outright). Both underlying bugs found (missing
+`<assemble_item>`, dangling thumbnail relationship) were real and are
+documented for any future attempt, but self-consistency checks proved
+insufficient twice — `--out` now refuses cleanly with an explanatory error
+rather than risk a third silent failure. Also landed Phase 7's cylindrical
+AND spherical projection math (17 new tests, 86/86 passing), not yet
+wired into the sampling pipeline. AS-4 (skill file) and the `LoadStrategy`
+fix (unaffected by the above, reading works fine) landed earlier this
+session; v0.1.0-alpha tagged and released on GitHub.

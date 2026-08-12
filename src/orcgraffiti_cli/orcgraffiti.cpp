@@ -10,10 +10,14 @@
 
 #include "libslic3r/Model.hpp"
 #include "libslic3r/TriangleMesh.hpp"
+#include "libslic3r/TriangleSelector.hpp"
+#include "libslic3r/Format/3mf.hpp"
 #include "libslic3r_version.h"
 #include "libslic3r/ImagePaint/TopologyFingerprint.hpp"
 #include "libslic3r/ImagePaint/ImagePaintPipeline.hpp"
 #include "libslic3r/ImagePaint/ImageDecoder.hpp"
+
+#include <boost/filesystem.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -53,8 +57,19 @@ void print_help()
         "  --colors <n>         Target quantizer colors, 1-16 (default 4)\n"
         "  --quality <q>        fast|threepoint|gaussian7 (default gaussian7)\n"
         "  --merge <policy>     overwrite|preserve (default overwrite)\n"
-        "  --dry-run            Run pipeline, write report only, no 3MF write (required —\n"
-        "                       write mode / --out is AS-3, not yet implemented)\n"
+        "  --dry-run            Run pipeline, write report only, no 3MF write\n"
+        "  --out <path.3mf>     Write mode: apply the plan and save a plain 3MF (see note)\n"
+        "  --force              Allow overwriting an existing --out path\n"
+        "  --allow-in-place     Allow --out to equal the input path (default: refused)\n"
+        "\n"
+        "Exactly one of --dry-run or --out is required for paint.\n"
+        "\n"
+        "NOTE: --out writes a plain (non-BBS) 3MF via Slic3r::store_3mf — printer/\n"
+        "filament/plate/profile settings from a BBS/Orca project input are NOT\n"
+        "carried into the output (AS-3 v1 scope). This CLI's own 'info'/'paint\n"
+        "--dry-run' cannot currently detect paint on a .3mf produced by --out\n"
+        "(reader-format mismatch — see AI_STATUS.md); a manual GUI reopen check is\n"
+        "the only current way to confirm --out worked. See Agent_Surface.md.\n"
         "\n"
         "See docs/OrcGraffiti/Agent_Surface.md for the full CLI contract.\n";
 }
@@ -62,7 +77,7 @@ void print_help()
 void print_version()
 {
     std::cout << "orcgraffiti " << SLIC3R_VERSION
-               << " (agent-surface AS-2, ImagePaint core)\n";
+               << " (agent-surface AS-3, ImagePaint core)\n";
 }
 
 std::string hex64(std::uint64_t v)
@@ -106,6 +121,32 @@ json bbox_json(const BoundingBoxf3& bb)
     return j;
 }
 
+// Model::read_from_file's own default (LoadStrategy::AddDefaultInstances alone)
+// omits LoadModel/LoadConfig/LoadAuxiliary — for .3mf inputs this makes the BBS
+// 3MF importer populate zero objects (silently — no error, just an empty model).
+// OrcaSlicer.cpp's own CLI ORs these three in for any .3mf load; do the same
+// here. The extra bits are unused by the STL/OBJ loaders, so always including
+// them is harmless for non-3MF inputs.
+LoadStrategy full_load_strategy()
+{
+    return LoadStrategy::LoadModel | LoadStrategy::LoadConfig
+         | LoadStrategy::AddDefaultInstances | LoadStrategy::LoadAuxiliary;
+}
+
+// Model::read_from_archive (the GUI's own "Open Project" path, per
+// Plater.cpp) was tried here to make this CLI's self-check match what the
+// GUI does for .3mf files, since it detects Prusa/generic 3MF and can read
+// the slic3rpe:mmu_segmentation attribute Slic3r::store_3mf writes — but it
+// segfaults even on a known-good fixture (tests/data/test_3mf), both before
+// and after our own paint. Reverted to plain Model::read_from_file for all
+// inputs. Consequence: this CLI's own info/paint --dry-run cannot currently
+// detect paint written via --out on a .3mf output (see AI_STATUS.md) — a
+// human GUI check remains the only way to confirm --out actually worked.
+Model load_model_for_cli(const std::string& input_path)
+{
+    return Model::read_from_file(input_path, nullptr, nullptr, full_load_strategy());
+}
+
 // AS-1 exit gate: "info" JSON per Agent_Surface.md §6.4 on a fixture input.
 int cmd_info(const std::string& input_path, const std::string& report_path)
 {
@@ -115,7 +156,7 @@ int cmd_info(const std::string& input_path, const std::string& report_path)
 
     Model model;
     try {
-        model = Model::read_from_file(input_path);
+        model = load_model_for_cli(input_path);
     } catch (const std::exception& ex) {
         report["ok"] = false;
         report["error"] = { {"code", "ModelLoadFailed"}, {"message", ex.what()} };
@@ -288,6 +329,7 @@ struct PaintOptions {
     std::string image_path;
     std::string filaments_path;
     std::string report_path;
+    std::string out_path;
     std::size_t object_index = 0;
     std::size_t volume_index = 0;
     std::string view          = "front";
@@ -295,6 +337,8 @@ struct PaintOptions {
     std::string quality       = "gaussian7";
     std::string merge         = "overwrite";
     bool dry_run              = false;
+    bool force                = false;
+    bool allow_in_place       = false;
 };
 
 int write_report_and_exit(const json& report, const std::string& report_path, int code)
@@ -319,17 +363,43 @@ int cmd_paint(const PaintOptions& opt)
     report["input"]    = opt.input_path;
     report["dry_run"]  = opt.dry_run;
 
-    if (!opt.dry_run) {
+    // Exactly one of --dry-run / --out is required (§6.5 "Output / safety").
+    if (opt.dry_run == !opt.out_path.empty()) {
         report["ok"] = false;
         report["error"] = { {"code", "InvalidTarget"},
-                             {"message", "write mode (--out) is AS-3 and not yet implemented; pass --dry-run"} };
-        std::cerr << "orcgraffiti: paint write mode not yet implemented — pass --dry-run\n";
+                             {"message", opt.dry_run
+                                 ? "--dry-run and --out are mutually exclusive"
+                                 : "exactly one of --dry-run or --out is required"} };
+        std::cerr << "orcgraffiti: exactly one of --dry-run or --out is required\n";
         return write_report_and_exit(report, opt.report_path, 1);
+    }
+
+    namespace fs = boost::filesystem;
+    if (!opt.dry_run) {
+        // §11.1: refuse overwriting the caller's only copy by accident.
+        bool same_path = false;
+        try {
+            same_path = fs::exists(opt.input_path)
+                && fs::exists(opt.out_path)
+                && fs::equivalent(opt.input_path, opt.out_path);
+        } catch (const std::exception&) { /* one side missing yet — not equivalent */ }
+        if ((same_path || opt.input_path == opt.out_path) && !opt.allow_in_place) {
+            report["ok"] = false;
+            report["error"] = { {"code", "InvalidTarget"},
+                                 {"message", "--out equals input path; pass --allow-in-place to overwrite in place"} };
+            return write_report_and_exit(report, opt.report_path, 1);
+        }
+        if (fs::exists(opt.out_path) && !opt.force) {
+            report["ok"] = false;
+            report["error"] = { {"code", "InvalidTarget"},
+                                 {"message", "--out already exists; pass --force to overwrite"} };
+            return write_report_and_exit(report, opt.report_path, 1);
+        }
     }
 
     Model model;
     try {
-        model = Model::read_from_file(opt.input_path);
+        model = load_model_for_cli(opt.input_path);
     } catch (const std::exception& ex) {
         report["ok"] = false;
         report["error"] = { {"code", "ModelLoadFailed"}, {"message", ex.what()} };
@@ -342,13 +412,13 @@ int cmd_paint(const PaintOptions& opt)
         report["error"] = { {"code", "InvalidTarget"}, {"message", "object index out of range"} };
         return write_report_and_exit(report, opt.report_path, 1);
     }
-    const ModelObject* obj = model.objects[opt.object_index];
+    ModelObject* obj = model.objects[opt.object_index];
     if (opt.volume_index >= obj->volumes.size()) {
         report["ok"] = false;
         report["error"] = { {"code", "InvalidTarget"}, {"message", "volume index out of range"} };
         return write_report_and_exit(report, opt.report_path, 1);
     }
-    const ModelVolume* vol = obj->volumes[opt.volume_index];
+    ModelVolume* vol = obj->volumes[opt.volume_index];
     report["selection"] = { {"object_index", opt.object_index}, {"volume_index", opt.volume_index} };
 
     const auto preset = view_preset(opt.view);
@@ -434,10 +504,49 @@ int cmd_paint(const PaintOptions& opt)
         return write_report_and_exit(report, opt.report_path, 2);
     }
 
-    report["ok"]          = true;
     report["diagnostics"] = diagnostics_json(result->diagnostics);
     report["matches"]     = matches_json(result->matches);
-    report["error"]       = nullptr;
+
+    if (opt.dry_run) {
+        report["ok"]    = true;
+        report["error"] = nullptr;
+        return write_report_and_exit(report, opt.report_path, 0);
+    }
+
+    // AS-3 apply: reuse the ImagePaintJob::finalize pattern (deserialize existing
+    // facets first so paint outside the image footprint survives, then overlay
+    // only the faces the projector touched) — see src/slic3r/GUI/Jobs/ImagePaintJob.cpp.
+    TriangleSelector selector(vol->mesh());
+    selector.deserialize(vol->mmu_segmentation_facets.get_data(),
+                          /*needs_reset=*/true,
+                          EnforcerBlockerType::ExtruderMax);
+    for (std::size_t i = 0; i < result->states.size(); ++i) {
+        if (result->states[i] != ImagePaint::kStateNone)
+            selector.set_facet(static_cast<int>(i),
+                                static_cast<EnforcerBlockerType>(result->states[i]));
+    }
+    vol->mmu_segmentation_facets.set(selector);
+
+    // AS-3 v1 scope: plain (non-BBS) 3MF via store_3mf. This opens in any
+    // 3MF-compliant tool but does not carry printer/filament/plate/profile
+    // settings from a BBS/Orca project input — see Agent_Surface.md and
+    // AI_STATUS.md's AS-3 investigation notes for why the BBS writer
+    // (store_bbs_3mf) isn't used here yet.
+    const bool stored = store_3mf(opt.out_path.c_str(), &model, nullptr,
+                                   /*fullpath_sources=*/false);
+    if (!stored) {
+        report["ok"] = false;
+        report["error"] = { {"code", "ApplyFailed"}, {"message", "store_3mf failed to write " + opt.out_path} };
+        std::cerr << "orcgraffiti: failed to write '" << opt.out_path << "'\n";
+        return write_report_and_exit(report, opt.report_path, 3); // I/O error
+    }
+
+    report["ok"]     = true;
+    report["output"] = opt.out_path;
+    report["output_format"] = "plain-3mf";
+    report["error"]  = nullptr;
+    std::cerr << "orcgraffiti: wrote " << opt.out_path
+               << " (plain 3MF — printer/filament/plate settings not carried through, see --help)\n";
 
     return write_report_and_exit(report, opt.report_path, 0);
 }
@@ -502,7 +611,10 @@ int main(int argc, char** argv)
             else if (a == "--colors" && i + 1 < args.size())   opt.colors          = static_cast<std::uint32_t>(std::stoul(args[++i]));
             else if (a == "--quality" && i + 1 < args.size())  opt.quality         = args[++i];
             else if (a == "--merge" && i + 1 < args.size())    opt.merge           = args[++i];
+            else if (a == "--out" && i + 1 < args.size())      opt.out_path        = args[++i];
             else if (a == "--dry-run")                         opt.dry_run         = true;
+            else if (a == "--force")                           opt.force           = true;
+            else if (a == "--allow-in-place")                  opt.allow_in_place  = true;
             else if (opt.input_path.empty())                   opt.input_path      = a;
         }
         if (opt.input_path.empty()) {

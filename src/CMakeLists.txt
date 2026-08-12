@@ -141,6 +141,17 @@ if (BUILD_TESTS)
         PASS_REGULAR_EXPRESSION "\"triangle_count\": 12"
         LABELS "OrcGraffiti;CLI")
 
+    # Regression guard for the LoadStrategy bug found during AS-3 investigation:
+    # Model::read_from_file's default LoadStrategy (AddDefaultInstances alone)
+    # omits LoadModel/LoadConfig, which makes the BBS 3MF importer silently
+    # populate zero objects for any .3mf input. full_load_strategy() in
+    # orcgraffiti.cpp fixes this — this test locks it in.
+    add_test(NAME orcgraffiti_cli_info_3mf_fixture
+             COMMAND orcgraffiti info "${ORCGRAFFITI_FIXTURES}/sample_project.3mf")
+    set_tests_properties(orcgraffiti_cli_info_3mf_fixture PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"ok\": true"
+        LABELS "OrcGraffiti;CLI")
+
     # Domain-error paths exit non-zero; PASS_REGULAR_EXPRESSION alone makes
     # CTest judge pass/fail purely on stdout content, not the exit code.
     add_test(NAME orcgraffiti_cli_info_missing_file
@@ -154,7 +165,16 @@ if (BUILD_TESTS)
                      --image "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
                      --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json")
     set_tests_properties(orcgraffiti_cli_paint_requires_dry_run_or_out PROPERTIES
-        PASS_REGULAR_EXPRESSION "AS-3"
+        PASS_REGULAR_EXPRESSION "exactly one of --dry-run or --out is required"
+        LABELS "OrcGraffiti;CLI")
+
+    add_test(NAME orcgraffiti_cli_paint_both_dry_run_and_out_rejected
+             COMMAND orcgraffiti paint "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --image "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json"
+                     --dry-run --out "${CMAKE_CURRENT_BINARY_DIR}/should_not_be_written.3mf")
+    set_tests_properties(orcgraffiti_cli_paint_both_dry_run_and_out_rejected PROPERTIES
+        PASS_REGULAR_EXPRESSION "mutually exclusive"
         LABELS "OrcGraffiti;CLI")
 endif()
 

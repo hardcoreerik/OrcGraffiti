@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 6+ mapping quality green. **Agent Surface AS-1 (CLI skeleton) implemented.**
+Phase 6+ mapping quality green. **Agent Surface AS-1 and AS-2 implemented and tested.**
 
 ## Current Branch
 
@@ -22,18 +22,44 @@ feature/image-paint-phase1-types
 
 - ImagePaint unit tests: **69/69** (incl. garth.jpg integration when present)
 - Full app: Release `orca-slicer.exe` builds
-- `orcgraffiti.exe` (new): `version`, `help`, `info` — builds and links libslic3r only
+- `orcgraffiti.exe`: `version`, `help`, `info`, `paint --dry-run` — links libslic3r only
+- ctest: 19/19 green (15 ImagePaint core + 4 orcgraffiti CLI contract tests)
 - Sample image: `C:\Users\hardc\OneDrive\Pictures\garth.jpg`
 
 ## Active Task
 
-AS-2: extend `orcgraffiti` with `paint --dry-run`, wiring `run_image_paint` to a
-loaded 3MF/STL volume and producing the diagnostics report from §6.8.
+AS-3: `orcgraffiti paint --out <path.3mf>` — write mode. Currently rejected
+with a clear "not yet implemented" error (see `cmd_paint` in
+`src/orcgraffiti_cli/orcgraffiti.cpp`).
+
+**Technical plan for AS-3** (scoped out this loop — higher risk, needs care):
+1. `Model::read_from_file` must be called with real `DynamicPrintConfig*`,
+   `ConfigSubstitutionContext*`, `PlateDataPtrs*`, `vector<Preset*>*` — not
+   the current `nullptr` defaults — so the loaded project's config/plates
+   can be handed back to `store_bbs_3mf` unchanged (INV-008: no printer/
+   profile mutation).
+2. Reuse `ImagePaintJob::finalize`'s apply pattern
+   (`src/slic3r/GUI/Jobs/ImagePaintJob.cpp:69-82`): build a
+   `TriangleSelector` from the target mesh, `deserialize()` existing
+   `mmu_segmentation_facets` first (preserve paint outside the image
+   footprint), overlay non-`kStateNone` plan states via `set_facet`, then
+   `vol->mmu_segmentation_facets.set(selector)`.
+3. Refuse `--out` == input path unless `--allow-in-place` (§11.1); require
+   `--force` to overwrite an existing `--out`.
+4. Call `store_bbs_3mf(StoreParams&)` with the model, the config/plate data
+   loaded in step 1, and `SaveStrategy::Zip64`.
+5. `release_PlateData_list(plate_data)` before returning (raw-pointer
+   ownership — verify no double-free against the loaded `Model`).
+6. **AS-3's true exit gate is a human GUI reopen proof** — the CLI can
+   self-verify round-trip via its own `info` command (fingerprint/triangle
+   count/`has_mmu_paint` unchanged after write), but that is a proxy, not
+   the gate itself. Flag this clearly when AS-3 lands.
 
 ## Next Three Tasks
 
-1. AS-2 paint dry-run command (no 3MF mutation, report only)
-2. AS-3 paint write path (3MF apply + GUI reopen proof)
+1. AS-3 paint write path per the technical plan above
+2. Once AS-3 lands: ask for a manual GUI reopen check on a real 3MF with
+   `--out` paint applied
 3. Keep PR #1 updated; GUI retest auto-fit paint with garth.jpg when convenient
 
 ## Open PRs
@@ -42,6 +68,7 @@ https://github.com/hardcoreerik/OrcGraffiti/pull/1
 
 ## Updated
 
-2026-08-11 — AS-1 orcgraffiti CLI skeleton landed (version/help/info), verified
-against tests/orcgraffiti_cli/fixtures/unit_cube.stl. v0.1.0-alpha tagged
-and released on GitHub earlier this session.
+2026-08-11 — AS-2 `paint --dry-run` landed (full pipeline wired: decode,
+fit_planar_projection, run_image_paint, diagnostics/matches report) plus 4
+ctest CLI contract tests. AS-1 (`info`) also landed this session.
+v0.1.0-alpha tagged and released on GitHub earlier this session.

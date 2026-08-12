@@ -4,6 +4,8 @@
 #include "libslic3r/ImagePaint/Projection.hpp"
 #include "libslic3r/ImagePaint/FaceSampler.hpp"
 
+#include <cmath>
+
 using namespace Slic3r;
 using namespace Slic3r::ImagePaint;
 using namespace Catch::Matchers;
@@ -273,4 +275,133 @@ TEST_CASE("GaussianSampler7 barycentric coords sum to 1.0 per point", "[ImagePai
         const float s = b[0] + b[1] + b[2];
         CHECK_THAT(s, WithinAbs(1.0f, 1e-5f));
     }
+}
+
+// ---------------------------------------------------------------------------
+// CylinderFrame construction (Phase 7 — Roadmap.md §11)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("make_cylinder_frame produces valid orthonormal frame", "[ImagePaint][Projection][Cylindrical]")
+{
+    auto result = make_cylinder_frame(Vec3d(0, 0, 1), Vec3d(1, 0, 0), Vec3d::Zero());
+    REQUIRE(result.has_value());
+    const auto& f = result.value();
+
+    CHECK_THAT(f.axis.norm(),         WithinAbs(1.0, 1e-10));
+    CHECK_THAT(f.radial_basis.norm(), WithinAbs(1.0, 1e-10));
+    CHECK_THAT(f.tangent.norm(),      WithinAbs(1.0, 1e-10));
+
+    CHECK_THAT(f.axis.dot(f.radial_basis), WithinAbs(0.0, 1e-10));
+    CHECK_THAT(f.axis.dot(f.tangent),      WithinAbs(0.0, 1e-10));
+    CHECK_THAT(f.radial_basis.dot(f.tangent), WithinAbs(0.0, 1e-10));
+}
+
+TEST_CASE("make_cylinder_frame rejects degenerate axis/radial_hint combination", "[ImagePaint][Projection][Cylindrical]")
+{
+    // radial_hint parallel to axis — no well-defined "angle 0" direction.
+    auto result = make_cylinder_frame(Vec3d(0, 0, 1), Vec3d(0, 0, 5), Vec3d::Zero());
+    REQUIRE(!result.has_value());
+    CHECK(result.error().code == ImagePaintErrorCode::InvalidProjection);
+}
+
+// ---------------------------------------------------------------------------
+// project_cylindrical — known-point checks
+// ---------------------------------------------------------------------------
+
+static CylindricalProjectionSettings default_cyl_proj()
+{
+    auto fr = make_cylinder_frame(Vec3d(0, 0, 1), Vec3d(1, 0, 0), Vec3d::Zero());
+    REQUIRE(fr.has_value());
+
+    CylindricalProjectionSettings s;
+    s.frame = *fr;
+    s.seam_angle_radians = 0.0;
+    s.wrap_angle_radians = 2.0 * PI;
+    s.height_mm = 100.0;
+    return s;
+}
+
+TEST_CASE("project_cylindrical maps the seam-angle direction to u=0.5", "[ImagePaint][Projection][Cylindrical]")
+{
+    auto s = default_cyl_proj();
+    const auto pp = project_cylindrical(Vec3d(10, 0, 0), s);
+
+    CHECK_THAT(pp.u, WithinAbs(0.5, 1e-10));
+    CHECK_THAT(pp.v, WithinAbs(0.5, 1e-10));
+    CHECK(pp.inside);
+}
+
+TEST_CASE("project_cylindrical maps a quarter turn to u=0.75", "[ImagePaint][Projection][Cylindrical]")
+{
+    auto s = default_cyl_proj();
+    // (0, R, 0) is +90 degrees from the seam-angle direction (1,0,0) around +Z.
+    const auto pp = project_cylindrical(Vec3d(0, 10, 0), s);
+
+    CHECK_THAT(pp.u, WithinAbs(0.75, 1e-10));
+    CHECK(pp.inside);
+}
+
+TEST_CASE("project_cylindrical maps the opposite direction to the seam (u=1.0)", "[ImagePaint][Projection][Cylindrical]")
+{
+    auto s = default_cyl_proj();
+    const auto pp = project_cylindrical(Vec3d(-10, 0, 0), s);
+
+    CHECK_THAT(pp.u, WithinAbs(1.0, 1e-10));
+}
+
+TEST_CASE("project_cylindrical maps height to v centred at the frame origin", "[ImagePaint][Projection][Cylindrical]")
+{
+    auto s = default_cyl_proj();
+
+    const auto top    = project_cylindrical(Vec3d(10, 0, 50), s);
+    const auto bottom = project_cylindrical(Vec3d(10, 0, -50), s);
+    const auto mid     = project_cylindrical(Vec3d(10, 0, 0), s);
+
+    CHECK_THAT(top.v,    WithinAbs(0.0, 1e-10));
+    CHECK_THAT(bottom.v, WithinAbs(1.0, 1e-10));
+    CHECK_THAT(mid.v,    WithinAbs(0.5, 1e-10));
+}
+
+TEST_CASE("project_cylindrical excludes points outside the radius range", "[ImagePaint][Projection][Cylindrical]")
+{
+    auto s = default_cyl_proj();
+    s.min_radius_mm = 8.0;
+    s.max_radius_mm = 12.0;
+
+    const auto outer_ok  = project_cylindrical(Vec3d(10, 0, 0), s);
+    const auto too_small = project_cylindrical(Vec3d(2, 0, 0), s);  // radius 2 < min 8
+    const auto too_large = project_cylindrical(Vec3d(20, 0, 0), s); // radius 20 > max 12
+
+    CHECK(outer_ok.inside);
+    CHECK(!too_small.inside);
+    CHECK(!too_large.inside);
+}
+
+TEST_CASE("project_cylindrical partial wrap excludes points beyond the wrap angle", "[ImagePaint][Projection][Cylindrical]")
+{
+    auto s = default_cyl_proj();
+    s.wrap_angle_radians = PI; // paint only a 180-degree slice centred on the seam angle
+
+    const auto front = project_cylindrical(Vec3d(10, 0, 0), s);   // 0 degrees — inside the slice
+    const auto side   = project_cylindrical(Vec3d(0, 10, 0), s);   // 90 degrees — at the edge
+    const auto back    = project_cylindrical(Vec3d(-10, 0, 0), s); // 180 degrees — outside a 180-degree wrap
+
+    CHECK(front.inside);
+    CHECK(side.inside);
+    CHECK(!back.inside);
+}
+
+TEST_CASE("project_cylindrical is continuous across the seam for a full wrap", "[ImagePaint][Projection][Cylindrical]")
+{
+    auto s = default_cyl_proj();
+    // Two points just on either side of the seam (opposite the seam angle)
+    // should map to u values close to 0 and 1 respectively, not jump elsewhere.
+    const double eps = 1e-4;
+    const auto just_before = project_cylindrical(
+        Vec3d(10 * std::cos(PI - eps), 10 * std::sin(PI - eps), 0), s);
+    const auto just_after = project_cylindrical(
+        Vec3d(10 * std::cos(-PI + eps), 10 * std::sin(-PI + eps), 0), s);
+
+    CHECK(just_before.u > 0.99);
+    CHECK(just_after.u  < 0.01);
 }

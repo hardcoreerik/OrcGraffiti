@@ -4,9 +4,11 @@
 #include "ImagePaintErrors.hpp"
 
 #include "libslic3r/Point.hpp"  // Vec3d, Transform3d
+#include "libslic3r/libslic3r.h"  // Slic3r::PI
 
 #include "ImagePaintCompat.hpp"
 #include <optional>
+#include <limits>
 
 namespace Slic3r::ImagePaint {
 
@@ -100,5 +102,64 @@ std::pair<double,double> apply_rotation_mirror(double u, double v,
                                                 double rotation_radians,
                                                 bool   mirror_u,
                                                 bool   mirror_v);
+
+// ---------------------------------------------------------------------------
+// Phase 7 — Cylindrical projection (Roadmap.md §11).
+// ---------------------------------------------------------------------------
+
+// A right-handed orthonormal cylinder frame in mesh-local/object/world space.
+// axis is the cylinder's rotation axis; radial_basis is the "0 angle"
+// direction (perpendicular to axis); tangent = axis x radial_basis.
+struct CylinderFrame {
+    Vec3d origin        = Vec3d::Zero();
+    Vec3d axis          = Vec3d::UnitZ();
+    Vec3d radial_basis  = Vec3d::UnitX();
+    Vec3d tangent       = Vec3d::UnitY();
+};
+
+// Settings for a cylindrical projection onto the mesh surface.
+// All distances in millimetres, all angles in radians.
+struct CylindricalProjectionSettings {
+    CylinderFrame frame;
+
+    // seam_angle_radians names the angular direction that maps to u=0.5
+    // (the mapping's "front"); the UV seam (u wraps 0<->1) sits at the
+    // opposite angle, seam_angle_radians + pi. This mirrors the standard
+    // cylindrical-UV convention of naming a front-facing reference angle
+    // rather than the seam location itself.
+    double seam_angle_radians = 0.0;
+
+    // Total angular extent mapped across u in [0,1]. 2*pi = full wrap
+    // (seamless, textures the whole circumference); less than 2*pi paints
+    // only an angular slice, leaving the rest outside.
+    double wrap_angle_radians = 2.0 * PI;
+
+    // Total height mapped across v in [0,1], centred on the frame origin
+    // (height=0 maps to v=0.5).
+    double height_mm = 100.0;
+
+    // Points whose radial distance from the axis falls outside this range
+    // are excluded (ProjectedPoint::inside = false) — used to filter the
+    // inner wall of a hollow cylindrical object from the outer surface.
+    double min_radius_mm = 0.0;
+    double max_radius_mm = std::numeric_limits<double>::infinity();
+
+    bool mirror_u = false;
+    bool mirror_v = false;
+};
+
+// Build a right-handed orthonormal CylinderFrame from a cylinder axis and a
+// radial-direction hint (the direction that becomes u=0.5). Returns error if
+// axis and radial_hint are parallel within tolerance (degenerate frame),
+// matching make_projector_frame's contract.
+Expected<CylinderFrame, ImagePaintError>
+make_cylinder_frame(const Vec3d& axis_direction,
+                    const Vec3d& radial_hint,
+                    const Vec3d& origin);
+
+// Project a single point from the coordinate space of the CylinderFrame.
+// p must already be in the same space as frame.origin/axes.
+ProjectedPoint project_cylindrical(const Vec3d&                          p,
+                                    const CylindricalProjectionSettings& s);
 
 } // namespace Slic3r::ImagePaint

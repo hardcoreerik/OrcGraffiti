@@ -166,4 +166,74 @@ ProjectedPoint project_planar(const Vec3d&                   p,
     return ProjectedPoint{ru, rv, depth, inside};
 }
 
+Expected<CylinderFrame, ImagePaintError>
+make_cylinder_frame(const Vec3d& axis_direction,
+                    const Vec3d& radial_hint,
+                    const Vec3d& origin)
+{
+    constexpr double kEps = 1e-8;
+
+    const Vec3d axis = axis_direction.normalized();
+    if (axis.norm() < kEps)
+        return make_unexpected(ImagePaintError{
+            ImagePaintErrorCode::InvalidProjection,
+            "Cylinder axis is degenerate (zero-length)."});
+
+    // radial_basis = component of radial_hint perpendicular to axis (Gram-Schmidt).
+    Vec3d radial = radial_hint - radial_hint.dot(axis) * axis;
+    if (radial.norm() < kEps)
+        return make_unexpected(ImagePaintError{
+            ImagePaintErrorCode::InvalidProjection,
+            "Radial hint and cylinder axis are parallel — cannot build cylinder frame."});
+    radial.normalize();
+
+    const Vec3d tangent = axis.cross(radial).normalized();
+
+    CylinderFrame frame;
+    frame.origin       = origin;
+    frame.axis         = axis;
+    frame.radial_basis = radial;
+    frame.tangent      = tangent;
+    return frame;
+}
+
+// Wrap an angle into (-PI, PI].
+static double wrap_to_pi(double angle)
+{
+    return std::atan2(std::sin(angle), std::cos(angle));
+}
+
+ProjectedPoint project_cylindrical(const Vec3d&                          p,
+                                    const CylindricalProjectionSettings& s)
+{
+    const Vec3d d      = p - s.frame.origin;
+    const double height = d.dot(s.frame.axis);
+    const Vec3d radial  = d - height * s.frame.axis;
+    const double radius = radial.norm();
+
+    const double theta = std::atan2(radial.dot(s.frame.tangent),
+                                     radial.dot(s.frame.radial_basis));
+
+    // dtheta in (-PI, PI], centred so u=0.5 faces seam_angle_radians; the UV
+    // seam (u wraps 0<->1) sits at the opposite angle. See CylindricalProjectionSettings.
+    const double dtheta = wrap_to_pi(theta - s.seam_angle_radians);
+    const double wrap    = (s.wrap_angle_radians > 1e-9) ? s.wrap_angle_radians : 2.0 * PI;
+
+    double u = 0.5 + dtheta / wrap;
+    double v = 0.5 - height / s.height_mm;
+
+    auto [ru, rv] = apply_rotation_mirror(u, v, 0.0, s.mirror_u, s.mirror_v);
+
+    const bool radius_ok = radius >= s.min_radius_mm && radius <= s.max_radius_mm;
+    const bool inside = radius_ok &&
+                         (ru >= 0.0 && ru <= 1.0 &&
+                          rv >= 0.0 && rv <= 1.0);
+
+    // depth: signed radial distance minus the surface radius has no single
+    // meaning without a nominal cylinder radius, so report the raw radial
+    // distance from the axis — callers filtering by depth for occlusion can
+    // combine this with min/max_radius_mm.
+    return ProjectedPoint{ru, rv, radius, inside};
+}
+
 } // namespace Slic3r::ImagePaint

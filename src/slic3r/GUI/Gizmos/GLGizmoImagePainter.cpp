@@ -417,14 +417,25 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
     ImGui::Separator();
 
     // --- View preset buttons ---
+    // Picking a preset also turns the viewport camera to match — the preset
+    // itself only changes which direction the image *projects* from, so
+    // without this the user can easily be looking at an unpainted face after
+    // Apply and mistake correct behavior for nothing having happened. Uses
+    // world axes (same as the toolbar's own view-cube buttons), so this is a
+    // viewport nicety only — it does not affect the paint math, which
+    // already resolves the projection frame in the volume's own local space
+    // regardless of camera orientation.
     m_imgui->text(_L("View"));
     static const char* view_labels[6] = {"Front", "Back", "Left", "Right", "Top", "Bottom"};
+    static const char* view_camera_directions[6] = {"front", "rear", "left", "right", "top", "bottom"};
     for (int i = 0; i < 6; ++i) {
         if (i > 0) ImGui::SameLine();
         const bool selected = (m_view_preset == i);
         if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
-        if (m_imgui->button(_(view_labels[i])))
+        if (m_imgui->button(_(view_labels[i]))) {
             m_view_preset = i;
+            m_parent.select_view(view_camera_directions[i]);
+        }
         if (selected) ImGui::PopStyleColor();
     }
 

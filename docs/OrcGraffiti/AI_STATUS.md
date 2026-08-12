@@ -503,6 +503,19 @@ The "Advanced camera-facing projection inverted colors" report is
 **not yet investigated** — that legacy path wasn't touched by any recent
 change; flagged as a real, separate report to chase next, not guessed at.
 
+## Viewport camera now follows the View preset button
+
+Built the concrete fix for the likely "looking at the wrong face" cause
+above: each View preset button now also calls the existing
+`GLCanvas3D::select_view(direction)` (the same function the toolbar's own
+view-cube buttons use) with the matching world-axis direction string
+(`Front→"front"`, `Back→"rear"`, `Left→"left"`, `Right→"right"`,
+`Top→"top"`, `Bottom→"bottom"`). Viewport-only — does not touch the paint
+math, which already resolves the projection frame in the volume's own
+local space independent of camera orientation; this just means the user
+is now actually looking at the face they just told the tool to paint.
+GUI DLL rebuilt, full `ALL_BUILD` clean.
+
 ## Next Three Tasks
 
 1. Waiting on the user's live GUI test of the Image Paint gizmo (launched

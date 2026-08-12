@@ -8,6 +8,12 @@ against real slicer software twice.**
 Phase 7: cylindrical/spherical projection math complete AND wired into the
 sampling pipeline (FaceSampler/ImagePaintPipeline) — not yet exposed via
 any CLI flag or GUI control.
+GUI Image Paint gizmo reworked this session to match MakerWorld's Mesh
+Graffiti workflow (View preset + Size% + Rotate, camera stays fixed and the
+model is moved into position) — see "GUI gizmo rework" section below for
+the interaction model AND a hard finding about why per-triangle painting
+can't visually match MakerWorld's fine-detail results without violating
+the no-remesh MVP invariant.
 
 ## Current Branch
 
@@ -142,6 +148,74 @@ lifecycle behind it — both bugs found were in package-level metadata that
 in the GUI's normal flow is populated by live application state
 (`PartPlateList::store_to_3mf_structure`, real thumbnail rendering) that
 a headless CLI has no equivalent for. There may be more such gaps.
+
+## GUI gizmo rework: MakerWorld-style View/Size/Rotate + a hard scope finding
+
+User asked for the Image Paint gizmo's interactive workflow to match
+MakerWorld's "Mesh Graffiti" tool directly. Two rounds of misreading the
+mechanic from screenshots (raycast-click-to-stamp was built and then fully
+deleted) were corrected by the user with an actual screen-capture video:
+the image stays fixed in the center of the screen; the user moves/rotates
+the *model* into position behind it (standard orbit/pan/zoom), adjusts
+Size% and Rotation sliders, then clicks Apply.
+
+Implemented (`GLGizmoImagePainter.hpp/.cpp`, `ImagePaint/Projection.hpp/.cpp`):
+- `ViewPreset` enum (Front/Back/Left/Right/Top/Bottom) + `view_preset_vectors()`
+  in `Projection.hpp/.cpp` — single source of truth shared by the CLI's
+  `--view` flag and the GUI's preset buttons, they cannot drift apart.
+- Gizmo panel: 6 view-preset buttons, Size% slider (scales the auto-fit
+  plane in place, centered), Rotate slider (drives the pre-existing
+  `PlanarProjectionSettings::rotation_radians`, previously dead), Apply.
+  Old camera-facing auto-fit path preserved as a collapsed "Advanced"
+  section rather than deleted.
+- Removed entirely: the `MeshRaycaster`-based click-to-stamp mechanic
+  (hover cursor sphere, `on_mouse`, `stamp_at`) — built from a
+  misunderstanding of the screenshots, fully deleted once the video showed
+  the real (non-raycast) mechanic.
+- Compiles clean (GUI DLL + CLI), 30/30 ctest, confirmed live via the
+  user's own screen recording: buttons highlight, sliders respond, Apply
+  fires a job and visibly changes a face color.
+
+### Finding: flat-color Apply result is NOT a bug — it's the no-remesh invariant working as designed
+
+User tested Apply on a low-poly (12-triangle) test cube with `garth.jpg`
+and got one flat color block, not recognizable image content: "it colored
+a side, but did not place anything resembling the images." Suspected
+image vectorization was missing.
+
+Investigated MakerWorld's own client (with the user's authenticated
+session, via browser inspection of network requests + fetched JS
+bundles — no credentials handled by the agent). Confirmed:
+
+- MakerWorld loads a Go/Rust WASM module explicitly logged as
+  `[CDT WASM]`, fetched as `cdt_wasm_bg.wasm` from
+  `.../makerlab/content-generator/cdt_wasm_bg.wasm`.
+- The surrounding JS bundle
+  (`_next/static/chunks/4134a352.*.js`, 1.5MB) has heavy `triangulat`
+  (46 hits) and `vectoriz` (36 hits) keyword density alongside the CDT
+  module reference.
+- Conclusion: MakerWorld vectorizes the uploaded image into contours,
+  then runs **Constrained Delaunay Triangulation to insert new mesh edges
+  along those contours** — i.e. it retriangulates (remeshes) the surface
+  in the painted region so each color patch gets its own precisely-shaped
+  triangles, independent of the original mesh's triangle density.
+
+This is a fundamentally different technique from per-existing-triangle
+painting, and it directly conflicts with AGENTS.md / Project_Truth.md's
+explicit MVP invariant: **"Do not remesh in MVP — no subdivision, repair,
+or edge collapse."** Our pipeline correctly refuses to do this. The flat
+block on the test cube is the expected, correct output of a no-remesh
+per-face painter on a 12-triangle mesh — not a defect in `apply()`,
+sampling, or quantization.
+
+**Decision (proceeding under existing MVP scope, not a new phase):**
+document this as a known, by-design MVP limitation — Image Paint quality
+is bounded by triangle density in the painted region; works acceptably on
+denser/organic meshes, poorly on primitives like test cubes/cylinders.
+A CDT-based "remesh for paint" mode is a legitimate idea for a **post-MVP
+phase** (new topology, undo, and 3MF implications — real scope, not a
+quick patch) but is explicitly out of scope right now per the existing
+invariant, and has not been started.
 
 ## Next Three Tasks
 

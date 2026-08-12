@@ -117,6 +117,12 @@ if(ORCA_TOOLS)
     target_compile_definitions(OrcaSlicer_profile_validator PRIVATE -DBOOST_ALL_NO_LIB -DBOOST_USE_WINAPI_VERSION=0x602 -DBOOST_SYSTEM_USE_UTF8)
 endif()
 
+# orcgraffiti — headless agent-surface CLI (docs/OrcGraffiti/Agent_Surface.md).
+# Single-TU executable linking libslic3r only, no wxWidgets/ImGui/OpenGL/Plater.
+add_executable(orcgraffiti orcgraffiti_cli/orcgraffiti.cpp)
+target_link_libraries(orcgraffiti libslic3r boost_headeronly libcurl OpenSSL::SSL OpenSSL::Crypto)
+target_compile_definitions(orcgraffiti PRIVATE -DBOOST_ALL_NO_LIB -DBOOST_USE_WINAPI_VERSION=0x602 -DBOOST_SYSTEM_USE_UTF8)
+
 # Create a slic3r executable
 # Process manifests for various platforms.
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/dev-utils/platform/msw/OrcaSlicer.rc.in ${CMAKE_CURRENT_BINARY_DIR}/OrcaSlicer.rc @ONLY)

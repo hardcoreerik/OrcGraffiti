@@ -208,14 +208,95 @@ block on the test cube is the expected, correct output of a no-remesh
 per-face painter on a 12-triangle mesh — not a defect in `apply()`,
 sampling, or quantization.
 
-**Decision (proceeding under existing MVP scope, not a new phase):**
-document this as a known, by-design MVP limitation — Image Paint quality
-is bounded by triangle density in the painted region; works acceptably on
-denser/organic meshes, poorly on primitives like test cubes/cylinders.
-A CDT-based "remesh for paint" mode is a legitimate idea for a **post-MVP
-phase** (new topology, undo, and 3MF implications — real scope, not a
-quick patch) but is explicitly out of scope right now per the existing
-invariant, and has not been started.
+**Superseded — user greenlit pursuing per-color-patch detail directly, and
+it turned out not to require remeshing at all.** See the next section.
+
+## Fine-detail paint resolution — implemented, no remeshing required
+
+Re-reading MakerWorld's approach more carefully: OrcaSlicer/OrcaSlicer's
+own `TriangleSelector` (the class already backing `mmu_segmentation_facets`
+for every paint gizmo — seam, support, fuzzy skin, MMU brush) already
+supports subdividing a face's *paint resolution* recursively, entirely
+within its own virtual split tree — the underlying `TriangleMesh` is never
+touched. This is exactly the mechanism every existing brush-painting
+gizmo already relies on for fine on-screen detail regardless of the base
+mesh's triangle count. Image Paint just wasn't using it — `ImagePaintJob::finalize`
+called `TriangleSelector::set_facet()` once per *original* triangle, one
+flat color per face, no matter how much detail the source image had.
+
+Investigated whether the existing brush-cursor path (`select_patch()` +
+`Sphere`/`Circle` cursor) could be reused for bulk area-fill, and found it
+unsuitable: `select_patch()` auto-derives its edge-length limit from
+cursor radius (`min(radius/5, 0.05mm)`), which is tuned for interactive
+close-up brush precision, not bulk full-image painting — reusing it as-is
+risked an uncontrolled, unbounded triangle explosion on any
+normal-sized painted area (the same class of risk the AS-3 saga already
+burned this project on once; not something to reintroduce carelessly).
+
+Added a small, additive API to `TriangleSelector` instead
+(`TriangleSelector.hpp/.cpp`), driven purely by edge length rather than a
+brush cursor, reusing the *same* underlying `split_triangle()`/
+`perform_split()` machinery `select_patch()` already relies on (so no new
+low-level splitting logic, just a new entry point into code already
+proven correct):
+
+- `subdivide_facet_uniform(facet_idx, max_edge_length)` — recursively
+  splits one original facet until every leaf's longest edge is
+  `<= max_edge_length`. Deterministic: same facet + same edge length on a
+  fresh facet always yields the same tree shape and leaf order.
+- `collect_leaves(facet_idx)` — returns each current leaf's mesh-space
+  vertex positions and a stable-until-next-split index handle.
+- `set_leaf_state(leaf_index, state)` — colors one leaf independently.
+
+5 new unit tests in `tests/libslic3r/test_triangle_selector.cpp` verify
+the edge-length bound holds for every returned leaf, that unrelated
+facets are untouched, that `collect_leaves()` order is repeatable across
+independent instances (required for the worker/apply-thread split below),
+and that per-leaf states round-trip through `serialize()`/`deserialize()`.
+
+**Pipeline wiring** (`ImagePaintPipeline.hpp/.cpp`): new opt-in
+`ImagePaintRequest::detail_edge_length_mm` (0 = off, byte-for-byte
+unchanged behavior for every pre-existing caller/test). When set, after
+the existing coarse per-face pass + cleanup + merge decide *which*
+original faces get new paint, each such face is subdivided (worker
+thread, using a throwaway `TriangleMesh`/`TriangleSelector` built from the
+immutable request snapshot — no live `ModelVolume*` touched) and every
+leaf is classified independently against the already-computed color
+clusters. Leaf states are recorded in `FacePaintPlan::detail_leaf_states`,
+keyed by original face index, in `collect_leaves()`'s deterministic order.
+A hard cap (`kMaxDetailLeaves = 250'000` total leaves) falls back
+remaining faces to their flat coarse color rather than risk an unbounded
+Apply-time hang — this is the same class of safety margin the AS-3
+post-mortem argued for, applied proactively this time.
+
+**Apply wiring** (`ImagePaintJob::finalize`, UI thread, unchanged
+threading contract — one undo snapshot, worker thread never touches the
+live model): for faces with detail leaves, `set_facet(NONE)` resets any
+prior split on that face, then `subdivide_facet_uniform()` + `collect_leaves()`
+are replayed on the *live* mesh (cheap — pure geometry, no image
+resampling needed since the split is deterministic and the topology
+fingerprint already guarantees the live mesh matches the snapshot the
+worker computed against) and zipped leaf-for-leaf with the plan's
+recorded states via `set_leaf_state()`.
+
+**GUI**: new "Detail" slider in `GLGizmoImagePainter`'s panel (0–2mm,
+"Off" at 0, default 0.5mm), wired straight to
+`req.detail_edge_length_mm`.
+
+**Proof it actually works** — new pipeline test
+`run_image_paint detail_edge_length_mm paints two colors onto one
+original triangle` (`test_image_paint_pipeline.cpp`): a vertically split
+red/green image projected onto the unit-cube fixture's top face (2
+triangles) produces 512 leaves spanning *both* colors, while the flat
+`states[]` array — the pre-existing ceiling — can only record one color
+per triangle (`states[2]==1`, `states[3]==2`, each a single value). This
+is the concrete, tested proof that per-color-patch detail finer than the
+source mesh's triangle density is now real, without remeshing.
+
+Verified: 100/100 `[ImagePaint]`/`[TriangleSelector]` Catch2 cases pass
+(was 93 before this entry — +5 TriangleSelector unit tests, +2 detail
+pipeline tests), full `ALL_BUILD` compiles clean (GUI DLL, CLI, all test
+suites), 559/559 ctest.
 
 ## Next Three Tasks
 

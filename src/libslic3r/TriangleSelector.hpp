@@ -342,6 +342,41 @@ public:
     // Set facet of the mesh to a given state. Only works for original triangles.
     void set_facet(int facet_idx, EnforcerBlockerType state);
 
+    // --- OrcGraffiti Image Paint: classifier-free uniform subdivision ---
+    //
+    // Recursively subdivide facet_idx (an unsplit original facet) so every
+    // resulting leaf's longest edge is <= max_edge_length (mesh units).
+    // Reuses the same split_triangle()/perform_split() machinery select_patch()
+    // drives from a brush cursor, but decides purely by edge length — no
+    // cursor shape involved. This only grows TriangleSelector's own virtual
+    // split tree (identical in kind to what every other paint gizmo already
+    // stores in mmu_segmentation_facets); the underlying TriangleMesh is never
+    // modified, so this does not violate the "no remeshing" MVP invariant.
+    // No state is assigned — collect leaves with collect_leaves() and assign
+    // with set_leaf_state() afterwards.
+    // Deterministic: the same facet_idx + max_edge_length called on a fresh
+    // (unsplit) facet always produces the same tree shape and the same
+    // collect_leaves() order — Image Paint relies on this to compute leaf
+    // colors on a worker thread and replay the identical split on the UI
+    // thread at Apply time without re-touching the source image.
+    void subdivide_facet_uniform(int facet_idx, float max_edge_length);
+
+    // One leaf triangle produced by subdivide_facet_uniform(), with its
+    // current mesh-local vertex positions. leaf_index is only valid until the
+    // next split/undivide/garbage_collect() call on this TriangleSelector.
+    struct LeafInfo {
+        int   leaf_index = -1;
+        Vec3f p0, p1, p2;
+    };
+
+    // Collect the current leaves under facet_idx, in the same depth-first
+    // order subdivide_facet_uniform() visits them.
+    std::vector<LeafInfo> collect_leaves(int facet_idx) const;
+
+    // Assign state to a leaf produced by collect_leaves()/subdivide_facet_uniform()
+    // on this same instance. leaf_index must still refer to a valid, unsplit leaf.
+    void set_leaf_state(int leaf_index, EnforcerBlockerType state);
+
     // Clear everything and make the tree empty.
     void reset();
 
@@ -499,6 +534,8 @@ protected:
 private:
     bool select_triangle(int facet_idx, EnforcerBlockerType type, bool triangle_splitting, bool select_partially);
     bool select_triangle_recursive(int facet_idx, const Vec3i32 &neighbors, EnforcerBlockerType type, bool triangle_splitting, bool select_partially);
+    // OrcGraffiti: edge-length-driven counterpart to select_triangle_recursive(), used by subdivide_facet_uniform().
+    void subdivide_facet_uniform_recursive(int facet_idx, const Vec3i32 &neighbors);
     void undivide_triangle(int facet_idx);
     void split_triangle(int facet_idx, const Vec3i32 &neighbors);
     void remove_useless_children(int facet_idx); // No hidden meaning. Triangles are meant.

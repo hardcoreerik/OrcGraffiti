@@ -1012,6 +1012,80 @@ void TriangleSelector::set_facet(int facet_idx, EnforcerBlockerType state)
     m_triangles[facet_idx].set_state(state);
 }
 
+// OrcGraffiti Image Paint: see declaration in TriangleSelector.hpp.
+void TriangleSelector::subdivide_facet_uniform(int facet_idx, float max_edge_length)
+{
+    assert(facet_idx < m_orig_size_indices);
+    if (!m_cursor) {
+        // split_triangle() only reads m_cursor->uniform_scaling/trafo for a
+        // non-uniform-scale coordinate transform. We operate purely in
+        // mesh-local space, so an identity-transform cursor is always
+        // correct here regardless of shape/radius chosen.
+        m_cursor = std::make_unique<Sphere>(Vec3f::Zero(), Vec3f::UnitZ(), 1.f,
+                                            Transform3d::Identity(), ClippingPlane());
+    }
+    set_edge_limit(max_edge_length);
+    subdivide_facet_uniform_recursive(facet_idx, m_neighbors[facet_idx]);
+}
+
+// Edge-length-driven counterpart to select_triangle_recursive() (see there):
+// same split_triangle()/child_neighbors() traversal, but every partially-
+// inside-a-cursor test is dropped — split_triangle() itself already stops
+// splitting a side once it's <= m_edge_limit_sqr, so unconditional recursion
+// into children terminates naturally without any cursor shape at all.
+void TriangleSelector::subdivide_facet_uniform_recursive(int facet_idx, const Vec3i32 &neighbors)
+{
+    Triangle* tr = &m_triangles[facet_idx];
+    if (! tr->valid())
+        return;
+    assert(this->verify_triangle_neighbors(*tr, neighbors));
+
+    split_triangle(facet_idx, neighbors);
+    tr = &m_triangles[facet_idx]; // might have been invalidated by split_triangle().
+    if (! tr->is_split())
+        return; // Leaf: every side already <= max_edge_length.
+
+    const int num_of_children = tr->number_of_split_sides() + 1;
+    for (int i = 0; i < num_of_children; ++i) {
+        assert(i < int(tr->children.size()));
+        assert(tr->children[i] < int(m_triangles.size()));
+        subdivide_facet_uniform_recursive(tr->children[i], this->child_neighbors(*tr, neighbors, i));
+        tr = &m_triangles[facet_idx]; // might have been invalidated
+    }
+}
+
+std::vector<TriangleSelector::LeafInfo> TriangleSelector::collect_leaves(int facet_idx) const
+{
+    std::vector<LeafInfo> out;
+
+    std::function<void(int)> visit = [&](int idx) {
+        const Triangle& tr = m_triangles[idx];
+        if (! tr.valid())
+            return;
+        if (! tr.is_split()) {
+            LeafInfo leaf;
+            leaf.leaf_index = idx;
+            leaf.p0 = m_vertices[tr.verts_idxs[0]].v;
+            leaf.p1 = m_vertices[tr.verts_idxs[1]].v;
+            leaf.p2 = m_vertices[tr.verts_idxs[2]].v;
+            out.push_back(leaf);
+            return;
+        }
+        const int num_of_children = tr.number_of_split_sides() + 1;
+        for (int i = 0; i < num_of_children; ++i)
+            visit(tr.children[i]);
+    };
+    visit(facet_idx);
+    return out;
+}
+
+void TriangleSelector::set_leaf_state(int leaf_index, EnforcerBlockerType state)
+{
+    assert(leaf_index >= 0 && leaf_index < int(m_triangles.size()));
+    assert(! m_triangles[leaf_index].is_split());
+    m_triangles[leaf_index].set_state(state);
+}
+
 // called by select_patch()->select_triangle()...select_triangle()
 // to decide which sides of the triangle to split and to actually split it calling set_division() and perform_split().
 void TriangleSelector::split_triangle(int facet_idx, const Vec3i32 &neighbors)

@@ -95,6 +95,14 @@ private:
     float m_size_percent  = 100.f; // percent of the auto-fit extent for that view
     float m_rotation_deg  = 0.f;
 
+    // Fine-detail subdivision target edge length, mm. 0 = off (one flat
+    // colour per original mesh triangle, the pre-existing behavior). Non-zero
+    // subdivides each painted face's paint resolution — via TriangleSelector's
+    // own virtual split tree, never the mesh itself — so a color patch isn't
+    // capped by the source mesh's triangle density. See
+    // ImagePaintRequest::detail_edge_length_mm and AI_STATUS.md.
+    float m_detail_mm = 0.5f;
+
     // Job infrastructure.
     std::unique_ptr<Worker>            m_worker;
     std::shared_ptr<std::atomic<bool>> m_cancel;

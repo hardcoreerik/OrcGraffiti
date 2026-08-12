@@ -6,6 +6,9 @@
 #include "FaceAdjacency.hpp"
 #include "FilamentMatcher.hpp"
 
+#include "libslic3r/TriangleMesh.hpp"
+#include "libslic3r/TriangleSelector.hpp"
+
 #include <cassert>
 #include <cmath>
 #include <limits>
@@ -175,6 +178,69 @@ run_pipeline(const ImagePaintRequest& req, const DecodedImage& image,
     plan.matches     = matches;
     plan.diagnostics = diag;
     plan.fingerprint = fp;
+
+    // --- Fine-detail subdivision (opt-in, see ImagePaintRequest::detail_edge_length_mm) ---
+    if (req.detail_edge_length_mm > 0.0) {
+        // Hard cap on total leaves: a small edge length over a large painted
+        // area can otherwise generate an unbounded number of sub-triangles
+        // and hang Apply on the UI thread. If the budget is exhausted, keep
+        // whatever detail was already computed for earlier faces and paint
+        // every remaining touched face with its flat (already-computed)
+        // states[] color instead of aborting the whole plan.
+        constexpr std::size_t kMaxDetailLeaves = 250'000;
+        std::size_t total_leaves = 0;
+        bool detail_budget_exceeded = false;
+
+        TriangleMesh snapshot_mesh(req.vertices, req.indices);
+        TriangleSelector selector(snapshot_mesh);
+        const auto edge_limit = static_cast<float>(req.detail_edge_length_mm);
+
+        for (std::size_t i = 0; i < n_faces; ++i) {
+            // Only faces this pass actually painted, and whose paint won the
+            // merge (matches PreserveExisting's "don't touch already-painted
+            // faces" as well as OverwriteInsideMask).
+            if (proposed[i] == kStateNone || merged[i] != proposed[i])
+                continue;
+
+            if (cancel && cancel())
+                return make_unexpected(ImagePaintError{ImagePaintErrorCode::Canceled, "Cancelled."});
+
+            if (detail_budget_exceeded)
+                continue; // this face keeps its flat states[i] color from above.
+
+            selector.subdivide_facet_uniform(static_cast<int>(i), edge_limit);
+            const auto leaves = selector.collect_leaves(static_cast<int>(i));
+
+            total_leaves += leaves.size();
+            if (total_leaves > kMaxDetailLeaves) {
+                detail_budget_exceeded = true;
+                plan.diagnostics.warnings.push_back(
+                    "Fine detail stopped early: painted area too large for the "
+                    "chosen detail resolution. Remaining faces used flat colour.");
+                continue;
+            }
+
+            std::vector<SelectorState> leaf_states;
+            leaf_states.reserve(leaves.size());
+            for (const auto& leaf : leaves) {
+                const Vec3d centroid = (leaf.p0.cast<double>() + leaf.p1.cast<double>() + leaf.p2.cast<double>()) / 3.0;
+                SelectorState state = kStateNone;
+                const auto pp = project(centroid, req.projection);
+                if (pp.inside) {
+                    const ColorRgba8 px = sample_bilinear(image, pp.u, pp.v);
+                    if (px.a > 0) {
+                        const ColorRgbf lin{srgb_to_linear(px.r), srgb_to_linear(px.g), srgb_to_linear(px.b)};
+                        const std::uint32_t cid = assign_to_cluster(linear_to_lab(lin), clusters);
+                        if (cid < cluster_state.size())
+                            state = cluster_state[cid];
+                    }
+                }
+                leaf_states.push_back(state);
+            }
+            plan.detail_leaf_states.emplace_back(static_cast<FaceIndex>(i), std::move(leaf_states));
+        }
+    }
+
     return plan;
 }
 

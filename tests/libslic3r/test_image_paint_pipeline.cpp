@@ -83,6 +83,38 @@ static std::vector<FilamentColor> one_red_filament()
     return {f};
 }
 
+// Left half one solid color, right half another — used to prove detail
+// subdivision can paint two colors onto a single original triangle, which
+// the flat per-face states[] path can never express (one value per face).
+static DecodedImage make_vertical_split_image(int w, int h, ColorRgb8 left, ColorRgb8 right)
+{
+    DecodedImage img;
+    img.width  = w;
+    img.height = h;
+    img.rgba.resize(static_cast<std::size_t>(w) * h * 4);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const ColorRgb8& c = (x < w / 2) ? left : right;
+            const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 4;
+            img.rgba[i+0] = c.r; img.rgba[i+1] = c.g; img.rgba[i+2] = c.b; img.rgba[i+3] = 255;
+        }
+    }
+    return img;
+}
+
+static std::vector<FilamentColor> red_and_green_filaments()
+{
+    FilamentColor red;
+    red.project_index = 0;
+    red.name          = "Red";
+    red.display_rgb   = {255, 0, 0};
+    FilamentColor green;
+    green.project_index = 1;
+    green.name          = "Green";
+    green.display_rgb   = {0, 255, 0};
+    return {red, green};
+}
+
 static ImagePaintRequest base_request()
 {
     ImagePaintRequest req;
@@ -189,6 +221,50 @@ TEST_CASE("run_image_paint PreserveExisting keeps pre-painted top face", "[Image
 
     CHECK(result->states[2] == 2);               // pre-painted face preserved
     CHECK(result->states[3] == kStateExtruderMin); // adjacent top face painted
+}
+
+TEST_CASE("run_image_paint detail_edge_length_mm paints two colors onto one original triangle", "[ImagePaint][Pipeline][Detail]")
+{
+    const auto image = make_vertical_split_image(64, 64, {255, 0, 0}, {0, 255, 0});
+
+    auto req = base_request();
+    req.filaments = red_and_green_filaments();
+    req.quantization.target_colors = 2;
+    req.detail_edge_length_mm      = 0.1;
+
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+
+    // Flat per-face states[] can only hold ONE value per original triangle —
+    // this is the ceiling detail subdivision exists to break through.
+    REQUIRE(result->states[2] != kStateNone);
+    REQUIRE(result->states[3] != kStateNone);
+
+    REQUIRE_FALSE(result->detail_leaf_states.empty());
+
+    bool found_red = false, found_green = false;
+    std::size_t leaves_on_top_face = 0;
+    for (const auto& [face_idx, leaf_states] : result->detail_leaf_states) {
+        if (face_idx != 2 && face_idx != 3) continue;
+        leaves_on_top_face += leaf_states.size();
+        for (const auto s : leaf_states) {
+            if (s == kStateExtruderMin)     found_red   = true;
+            if (s == kStateExtruderMin + 1) found_green = true;
+        }
+    }
+
+    CHECK(leaves_on_top_face > 1);
+    CHECK(found_red);
+    CHECK(found_green);
+}
+
+TEST_CASE("run_image_paint without detail_edge_length_mm leaves detail_leaf_states empty", "[ImagePaint][Pipeline][Detail]")
+{
+    const auto image = make_solid_image(64, 64, 255, 0, 0);
+
+    const auto result = run_image_paint(base_request(), image); // detail_edge_length_mm defaults to 0
+    REQUIRE(result.has_value());
+    CHECK(result->detail_leaf_states.empty());
 }
 
 TEST_CASE("run_image_paint diagnostics count painted faces", "[ImagePaint][Pipeline]")

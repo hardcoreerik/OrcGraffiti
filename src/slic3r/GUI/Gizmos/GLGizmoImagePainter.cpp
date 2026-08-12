@@ -353,6 +353,8 @@ void GLGizmoImagePainter::apply()
         }
     }
 
+    req.detail_edge_length_mm = static_cast<double>(m_detail_mm);
+
     submit_paint_request(std::move(req), mv, mesh, m_target_colors,
                          m_status_text, m_job_running, m_worker, m_cancel);
 }
@@ -445,6 +447,24 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
     ImGui::InputInt("##colors", &m_target_colors, 1, 1);
     ImGui::PopItemWidth();
     m_target_colors = std::max(1, std::min(m_target_colors, 16));
+
+    // --- Detail ---
+    // 0.00 = off (one flat colour per original mesh triangle). Non-zero
+    // subdivides paint resolution (TriangleSelector's own split tree, not the
+    // mesh) so a colour patch isn't capped by the source mesh's triangle
+    // density. Smaller = finer detail but more triangles to compute/apply.
+    m_imgui->text(_L("Detail"));
+    ImGui::SameLine(unit * 8.f);
+    ImGui::PushItemWidth(unit * 14.f);
+    ImGui::SliderFloat("##detail", &m_detail_mm, 0.f, 2.f,
+                       m_detail_mm <= 0.f ? "Off" : "%.2f mm");
+    if (ImGui::IsItemHovered())
+        m_imgui->tooltip(_L("Subdivides each painted face's paint resolution down to this "
+                            "edge length so color patches aren't capped by the mesh's own "
+                            "triangle density. 0 = off (one flat color per original triangle)."),
+                         ImGui::GetFontSize() * 20.f);
+    ImGui::PopItemWidth();
+    m_detail_mm = std::max(0.f, std::min(m_detail_mm, 2.f));
 
     ImGui::Separator();
 

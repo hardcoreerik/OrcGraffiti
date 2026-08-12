@@ -14,6 +14,7 @@
 #include "ImagePaintCompat.hpp"
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Slic3r::ImagePaint {
@@ -40,6 +41,17 @@ struct ImagePaintRequest {
     SamplingQuality       quality       = SamplingQuality::Gaussian7;
     MergePolicy           merge_policy  = MergePolicy::OverwriteInsideMask;
 
+    // Opt-in fine-detail subdivision (0 = disabled, matches all pre-existing
+    // callers/tests byte-for-byte). When > 0, every original face this pass
+    // paints is additionally subdivided — via TriangleSelector's own virtual
+    // split tree, never the underlying TriangleMesh — down to this edge
+    // length (mm) and each resulting leaf is colored independently, instead
+    // of the whole original face getting one averaged color. This is what
+    // lets Image Paint reproduce per-color-patch detail finer than the
+    // source mesh's own triangle density without remeshing — see
+    // docs/OrcGraffiti/AI_STATUS.md, "GUI gizmo rework" section.
+    double detail_edge_length_mm = 0.0;
+
     // Immutable mesh snapshot (caller copies from TriangleMesh::its).
     std::vector<Vec3f>   vertices;
     std::vector<Vec3i32> indices;
@@ -62,6 +74,17 @@ struct FacePaintPlan {
 
     // Mesh fingerprint at plan time — must match target before Apply is called.
     TopologyFingerprint fingerprint;
+
+    // Fine-detail leaves, present only when the request set detail_edge_length_mm
+    // > 0. One entry per original face this pass painted; each face's leaf
+    // states are in the exact order TriangleSelector::collect_leaves() visits
+    // them after TriangleSelector::subdivide_facet_uniform(face, detail_edge_length_mm)
+    // on that same (unsplit) face — deterministic, so Apply can replay the
+    // identical split on the live mesh and zip leaf-for-leaf without needing
+    // the source image again. `states` above still carries a whole-face
+    // fallback value for every touched face, for callers that don't apply
+    // fine detail (e.g. the CLI's --dry-run diagnostics).
+    std::vector<std::pair<FaceIndex, std::vector<SelectorState>>> detail_leaf_states;
 };
 
 // Run the full image-paint pipeline from a file path.

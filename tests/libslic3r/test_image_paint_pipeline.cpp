@@ -331,6 +331,111 @@ TEST_CASE("run_image_paint fit_planar_projection front view paints front faces",
     CHECK(result->diagnostics.painted_faces >= 2);
 }
 
+// The following four lock in the orcgraffiti CLI's back/left/right/bottom
+// --view presets (view_preset() in orcgraffiti.cpp), which were previously
+// only documented by inspection, not tested — front/top were the only
+// golden tests. Same look/up vectors as the CLI table.
+
+TEST_CASE("run_image_paint fit_planar_projection back view paints back faces", "[ImagePaint][Pipeline]")
+{
+    // CLI preset: back = look (0,-1,0), up (0,0,1).
+    auto req = base_request();
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
+        Vec3d(0, -1, 0), Vec3d(0, 0, 1), /*aspect=*/1.0, /*margin=*/1.02);
+    REQUIRE(fitted.has_value());
+    req.projection = *fitted;
+    req.projection.front_face_cosine_threshold = 0.05;
+    req.projection.minimum_coverage = 0.25;
+
+    const auto image = make_solid_image(32, 32, 0, 255, 0);
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+
+    // Back faces (y=1, normal +Y) are indices 6-7.
+    CHECK(result->states[6] == kStateExtruderMin);
+    CHECK(result->states[7] == kStateExtruderMin);
+    // Front faces (y=0, normal -Y) should remain unpainted.
+    CHECK(result->states[4] == kStateNone);
+    CHECK(result->states[5] == kStateNone);
+    CHECK(result->diagnostics.painted_faces >= 2);
+}
+
+TEST_CASE("run_image_paint fit_planar_projection left view paints left faces", "[ImagePaint][Pipeline]")
+{
+    // CLI preset: left = look (1,0,0), up (0,0,1).
+    auto req = base_request();
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
+        Vec3d(1, 0, 0), Vec3d(0, 0, 1), /*aspect=*/1.0, /*margin=*/1.02);
+    REQUIRE(fitted.has_value());
+    req.projection = *fitted;
+    req.projection.front_face_cosine_threshold = 0.05;
+    req.projection.minimum_coverage = 0.25;
+
+    const auto image = make_solid_image(32, 32, 0, 255, 0);
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+
+    // Left faces (x=0, normal -X) are indices 8-9.
+    CHECK(result->states[8] == kStateExtruderMin);
+    CHECK(result->states[9] == kStateExtruderMin);
+    // Right faces (x=1, normal +X) should remain unpainted.
+    CHECK(result->states[10] == kStateNone);
+    CHECK(result->states[11] == kStateNone);
+    CHECK(result->diagnostics.painted_faces >= 2);
+}
+
+TEST_CASE("run_image_paint fit_planar_projection right view paints right faces", "[ImagePaint][Pipeline]")
+{
+    // CLI preset: right = look (-1,0,0), up (0,0,1).
+    auto req = base_request();
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
+        Vec3d(-1, 0, 0), Vec3d(0, 0, 1), /*aspect=*/1.0, /*margin=*/1.02);
+    REQUIRE(fitted.has_value());
+    req.projection = *fitted;
+    req.projection.front_face_cosine_threshold = 0.05;
+    req.projection.minimum_coverage = 0.25;
+
+    const auto image = make_solid_image(32, 32, 0, 255, 0);
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+
+    // Right faces (x=1, normal +X) are indices 10-11.
+    CHECK(result->states[10] == kStateExtruderMin);
+    CHECK(result->states[11] == kStateExtruderMin);
+    // Left faces (x=0, normal -X) should remain unpainted.
+    CHECK(result->states[8] == kStateNone);
+    CHECK(result->states[9] == kStateNone);
+    CHECK(result->diagnostics.painted_faces >= 2);
+}
+
+TEST_CASE("run_image_paint fit_planar_projection bottom view paints bottom faces", "[ImagePaint][Pipeline]")
+{
+    // CLI preset: bottom = look (0,0,1), up (0,1,0).
+    auto req = base_request();
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
+        Vec3d(0, 0, 1), Vec3d(0, 1, 0), /*aspect=*/1.0, /*margin=*/1.02);
+    REQUIRE(fitted.has_value());
+    req.projection = *fitted;
+    req.projection.front_face_cosine_threshold = 0.05;
+    req.projection.minimum_coverage = 0.25;
+
+    const auto image = make_solid_image(32, 32, 0, 255, 0);
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+
+    // Bottom faces (z=0, normal -Z) are indices 0-1.
+    CHECK(result->states[0] == kStateExtruderMin);
+    CHECK(result->states[1] == kStateExtruderMin);
+    // Top faces (z=1, normal +Z) should remain unpainted.
+    CHECK(result->states[2] == kStateNone);
+    CHECK(result->states[3] == kStateNone);
+    CHECK(result->diagnostics.painted_faces >= 2);
+}
+
 // ---------------------------------------------------------------------------
 // Error cases
 // ---------------------------------------------------------------------------

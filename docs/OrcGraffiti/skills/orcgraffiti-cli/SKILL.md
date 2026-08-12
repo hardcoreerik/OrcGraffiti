@@ -117,9 +117,8 @@ orcgraffiti paint model.stl \
 
 Projection is always auto-fit to the mesh (no manual `--look`/`--up` flags
 yet) — `--view` picks the camera direction: `front`, `back`, `left`,
-`right`, `top`, `bottom`. `front`/`top` are locked to golden tests in
-`tests/libslic3r/test_image_paint_pipeline.cpp`; `back`/`left`/`bottom` are
-the geometric mirror, not independently golden-tested yet.
+`right`, `top`, `bottom`. All six are locked to golden tests in
+`tests/libslic3r/test_image_paint_pipeline.cpp`.
 
 Check `ok`, `diagnostics.painted_faces`, `diagnostics.warnings`. If
 `painted_faces` is 0, the view is probably wrong for this mesh — try a

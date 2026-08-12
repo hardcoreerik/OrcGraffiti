@@ -360,6 +360,74 @@ commit transaction into a live `ModelVolume` — `set_mesh`/`save_painting`/
 `ImagePaintJob`/`GLGizmoImagePainter` yet — nothing user-visible has
 changed in the running app from this update.
 
+## Live GUI testing — mirrored image, uncapped colors/detail found and fixed
+
+User tested the built Detail slider on a real reference model
+(`m5tab5`'s textured PEI plate) with `garth.jpg`. Screen recording review
+findings:
+
+- **Visual result at Detail=0.11mm/Colors=7 is genuinely good** — "EAT THE
+  RICH" text and the face silhouette are clearly legible on the real mesh,
+  a full turnaround from the earlier flat-block result. Confirms the
+  fine-detail subdivision work is doing its job on real geometry, not just
+  the unit-cube test fixture.
+- **Image came out mirrored** on a side view. Fixed: `GLGizmoImagePainter`
+  now has a "Flip" checkbox wired to the already-existing (previously
+  unexposed) `PlanarProjectionSettings::mirror_u`.
+- **Colors input was uncapped at a flat 16**, independent of the actual
+  printer. Fixed: now clamped to the selected printer's real extruder
+  count via `get_extruder_colors_from_plater_config()` — same source of
+  truth `submit_paint_request()` already uses to build the filament list.
+- **Real, serious problem found at the Preview/slicing stage**: at
+  Detail=0.11mm the slice produced **254 tool changes** and threw `A
+  G-code path goes beyond plate boundaries`. Investigated the root cause
+  (see below) rather than guess-patching it.
+
+### Root cause: pre-existing OrcaSlicer wipe-tower sizing gap, newly exposed
+
+Confirmed via code investigation, not assumption: `PartPlate::estimate_wipe_tower_size()`
+sizes/positions the wipe tower ONCE, early, from `plate_extruder_size`
+(how many distinct filaments are used anywhere on the plate) — it has no
+idea how many tool changes any single layer will need. The REAL depth is
+computed later, per-layer, inside `WipeTower::plan_tower_new()`
+(`update_all_layer_depth`), and grows **linearly and unboundedly** with
+that layer's tool-change count. Nothing re-validates or re-clamps the
+tower's placement after that real number is known. A thin, finely-painted
+texture concentrates hundreds of tool changes onto just a few top layers —
+far more than any prior coarse painting tool could ever produce — so the
+real per-layer wipe-tower depth blows past the early estimate, and the
+resulting tower geometry can extend past the bed edge on that layer. The
+post-slice `BuildVolume::all_paths_inside()` check correctly (if
+unhelpfully — it doesn't say "it's the wipe tower") flags this as the
+boundary error. **Not a bug in our diff** — this estimate-then-clamp-once
+architecture predates Image Paint; our feature is just the first thing
+capable of generating tool-change densities extreme enough to hit it.
+Rewriting OrcaSlicer's wipe-tower placement/validation is out of scope
+right now.
+
+### Fix: prevent the pathological input rather than chase the symptom
+
+Added a **Detail floor tied to the selected printer's nozzle diameter**
+(`ConfigOptionFloats "nozzle_diameter"`, same access pattern
+`GLGizmoBrimEars.cpp` already uses) — detail finer than the nozzle can
+physically resolve only multiplies tool changes and print time without
+adding anything visible, so the slider now snaps any nonzero value below
+that floor back up to it (0 = Off remains reachable as a distinct
+sentinel). This directly targets the mechanism that produced 254 tool
+changes; per user's explicit call, the "warn if paint remap drops
+significant area" safety net from the bake plan remains deliberately
+un-built until real testing shows it's actually needed — same reasoning
+applies here: fix the concrete problem that was actually observed, not a
+hypothetical one.
+
+Not yet addressed: even at a nozzle-diameter floor, a busy image can still
+produce a lot of small same-color regions. Bake plan §4 Option 2 (merge
+adjacent same-color leaves) becomes more clearly worth prioritizing given
+this real-world evidence — noted, not started.
+
+GUI DLL rebuilt, full `ALL_BUILD` clean, 104/104 ImagePaint tests still
+green (no core pipeline logic touched, only gizmo-side UI clamping).
+
 ## Next Three Tasks
 
 1. Waiting on the user's live GUI test of the Image Paint gizmo (launched

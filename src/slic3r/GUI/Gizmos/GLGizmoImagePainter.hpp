@@ -95,6 +95,12 @@ private:
     float m_size_percent  = 100.f; // percent of the auto-fit extent for that view
     float m_rotation_deg  = 0.f;
 
+    // Horizontal flip of the image before projection (PlanarProjectionSettings::mirror_u).
+    // Needed because a view preset's projector frame can end up mirrored
+    // relative to how the user expects to read the image on that face —
+    // e.g. text coming out backwards on a side view.
+    bool m_mirror_u = false;
+
     // Fine-detail subdivision target edge length, mm. 0 = off (one flat
     // colour per original mesh triangle, the pre-existing behavior). Non-zero
     // subdivides each painted face's paint resolution — via TriangleSelector's

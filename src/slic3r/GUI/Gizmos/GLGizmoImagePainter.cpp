@@ -184,6 +184,7 @@ GLGizmoImagePainter::build_view_preset_projection(const std::vector<Vec3f>& vert
     fitted->width_mm  *= scale;
     fitted->height_mm *= scale;
     fitted->rotation_radians = static_cast<double>(m_rotation_deg) * PI / 180.0;
+    fitted->mirror_u = m_mirror_u;
     // Allow somewhat oblique faces; 0.1 was excluding useful surface on organic meshes.
     fitted->front_face_cosine_threshold = 0.05;
     fitted->minimum_coverage = 0.25;
@@ -440,19 +441,44 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
     ImGui::SliderFloat("##rotate", &m_rotation_deg, 0.f, 360.f, "%.0f°");
     ImGui::PopItemWidth();
 
+    ImGui::SameLine();
+    ImGui::Checkbox(_u8L("Flip").c_str(), &m_mirror_u);
+
     // --- Colors ---
+    // Capped at the selected printer's actual extruder/filament count —
+    // asking for more colors than there are extruders to assign them to
+    // can't produce anything the printer can actually output.
+    int max_colors = 16;
+    if (auto* plater = wxGetApp().plater()) {
+        const auto n = plater->get_extruder_colors_from_plater_config().size();
+        if (n > 0)
+            max_colors = static_cast<int>(n);
+    }
+
     m_imgui->text(_L("Colors"));
     ImGui::SameLine(unit * 8.f);
     ImGui::PushItemWidth(unit * 5.f);
     ImGui::InputInt("##colors", &m_target_colors, 1, 1);
     ImGui::PopItemWidth();
-    m_target_colors = std::max(1, std::min(m_target_colors, 16));
+    m_target_colors = std::max(1, std::min(m_target_colors, max_colors));
 
     // --- Detail ---
     // 0.00 = off (one flat colour per original mesh triangle). Non-zero
     // subdivides paint resolution (TriangleSelector's own split tree, not the
     // mesh) so a colour patch isn't capped by the source mesh's triangle
-    // density. Smaller = finer detail but more triangles to compute/apply.
+    // density. Smaller = finer detail but more triangles to compute/apply —
+    // and, critically, more tool changes once actually sliced: the printer
+    // can't physically resolve color detail finer than roughly its nozzle
+    // diameter, so going below that just multiplies filament swaps (and
+    // print time) without adding anything visible. Floor the slider there.
+    float detail_min = 0.2f;
+    if (auto* preset_bundle = wxGetApp().preset_bundle) {
+        const auto* nozzle_diameters =
+            preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
+        if (nozzle_diameters && nozzle_diameters->size() > 0)
+            detail_min = static_cast<float>(nozzle_diameters->get_at(0));
+    }
+
     m_imgui->text(_L("Detail"));
     ImGui::SameLine(unit * 8.f);
     ImGui::PushItemWidth(unit * 14.f);
@@ -461,10 +487,14 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
     if (ImGui::IsItemHovered())
         m_imgui->tooltip(_L("Subdivides each painted face's paint resolution down to this "
                             "edge length so color patches aren't capped by the mesh's own "
-                            "triangle density. 0 = off (one flat color per original triangle)."),
+                            "triangle density. 0 = off (one flat color per original triangle). "
+                            "Floored at the nozzle diameter — finer than that only adds tool "
+                            "changes and print time, not visible detail."),
                          ImGui::GetFontSize() * 20.f);
     ImGui::PopItemWidth();
     m_detail_mm = std::max(0.f, std::min(m_detail_mm, 2.f));
+    if (m_detail_mm > 0.f && m_detail_mm < detail_min)
+        m_detail_mm = detail_min;
 
     ImGui::Separator();
 

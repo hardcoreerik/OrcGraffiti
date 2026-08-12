@@ -46,4 +46,26 @@ bake_candidate_mesh(const std::vector<Vec3f>&   vertices,
                     const std::vector<std::pair<FaceIndex, std::vector<SelectorState>>>& detail_leaf_states,
                     double detail_edge_length_mm);
 
+// Bake stage, Option 1: validates and lightly cleans up a candidate mesh
+// before any commit is attempted (see docs/OrcGraffiti/MeshGraffiti_Bake_Plan.md
+// section 8, steps 1-3). Removes zero-area triangles in lockstep with
+// triangle_states (so geometry and color never desync), then checks
+// manifoldness (its_num_open_edges == 0) and self-intersection
+// (MeshBoolean::cgal::does_self_intersect). Returns BakeInvalidGeometry if
+// either check still fails after cleanup.
+//
+// Deliberately NOT attempted here: automatic CGAL repair
+// (MeshBoolean::cgal::repair(), plan section 8 step 4). That function's
+// boolean-self-union pipeline does not preserve a stable per-triangle
+// correspondence with its input, so there is no safe way yet to carry
+// triangle_states through it without risking triangles ending up with the
+// WRONG color — a silently-wrong result is worse than a loud failure here.
+// bake_candidate_mesh() extracts geometry through
+// TriangleSelector::get_facets_strict(), already relied on elsewhere in
+// the app to produce manifold, T-junction-free output from a manifold
+// input mesh, so this path is expected to be rare; it's a safety net, not
+// a repair strategy. Revisit (with a color-preserving remap design) only
+// if real testing shows it's actually hit.
+Expected<BakedMesh, ImagePaintError> validate_baked_mesh(BakedMesh baked);
+
 } // namespace Slic3r::ImagePaint

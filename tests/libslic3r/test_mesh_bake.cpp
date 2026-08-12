@@ -187,3 +187,60 @@ TEST_CASE("bake_candidate_mesh on an empty mesh returns NoEligibleFaces", "[Imag
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == ImagePaintErrorCode::NoEligibleFaces);
 }
+
+// ---------------------------------------------------------------------------
+// validate_baked_mesh — bake stage 2 (plan section 8, steps 1-3)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("validate_baked_mesh passes through an already-valid mesh unchanged", "[ImagePaint][MeshBake]")
+{
+    BakedMesh baked;
+    baked.mesh.vertices = cube_vertices();
+    baked.mesh.indices  = cube_indices();
+    baked.triangle_states.assign(12, kStateNone);
+    baked.triangle_states[2] = kStateExtruderMin;
+
+    const auto result = validate_baked_mesh(baked);
+    REQUIRE(result.has_value());
+    CHECK(result->mesh.indices.size() == 12);
+    CHECK(result->triangle_states[2] == kStateExtruderMin);
+}
+
+TEST_CASE("validate_baked_mesh drops degenerate triangles and keeps states in sync", "[ImagePaint][MeshBake]")
+{
+    BakedMesh baked;
+    baked.mesh.vertices = cube_vertices();
+    baked.mesh.indices  = cube_indices();
+    baked.triangle_states.assign(12, kStateNone);
+    baked.triangle_states[2] = kStateExtruderMin;
+
+    // Append one zero-area (degenerate) triangle with a distinctive state —
+    // if it survives cleanup, or its removal desyncs the parallel array,
+    // this test catches it.
+    baked.mesh.indices.push_back({0, 0, 1});
+    baked.triangle_states.push_back(kStateExtruderMin + 5);
+
+    const auto result = validate_baked_mesh(baked);
+    REQUIRE(result.has_value());
+    CHECK(result->mesh.indices.size() == 12);
+    REQUIRE(result->mesh.indices.size() == result->triangle_states.size());
+
+    bool found_bogus_state = false;
+    for (auto s : result->triangle_states)
+        if (s == kStateExtruderMin + 5) found_bogus_state = true;
+    CHECK_FALSE(found_bogus_state);
+    CHECK(result->triangle_states[2] == kStateExtruderMin);
+}
+
+TEST_CASE("validate_baked_mesh rejects non-manifold geometry", "[ImagePaint][MeshBake]")
+{
+    BakedMesh baked;
+    baked.mesh.vertices = cube_vertices();
+    baked.mesh.indices  = cube_indices();
+    baked.mesh.indices.pop_back(); // drop one triangle of the "right" face -> open edges
+    baked.triangle_states.assign(baked.mesh.indices.size(), kStateNone);
+
+    const auto result = validate_baked_mesh(baked);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == ImagePaintErrorCode::BakeInvalidGeometry);
+}

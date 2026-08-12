@@ -1,6 +1,7 @@
 #include "MeshBake.hpp"
 
 #include "libslic3r/TriangleSelector.hpp"
+#include "libslic3r/MeshBoolean.hpp"
 
 #include <algorithm>
 
@@ -73,6 +74,45 @@ bake_candidate_mesh(const std::vector<Vec3f>&   vertices,
             ImagePaintErrorCode::NoEligibleFaces, "Bake produced no geometry."});
 
     return result;
+}
+
+Expected<BakedMesh, ImagePaintError> validate_baked_mesh(BakedMesh baked)
+{
+    // Cheap structural cleanup, lockstep with triangle_states so per-triangle
+    // colors never desync from geometry — its_remove_degenerate_faces() isn't
+    // used here precisely because it doesn't expose which indices it dropped.
+    indexed_triangle_set cleaned;
+    std::vector<SelectorState> cleaned_states;
+    cleaned.vertices = baked.mesh.vertices;
+    cleaned.indices.reserve(baked.mesh.indices.size());
+    cleaned_states.reserve(baked.triangle_states.size());
+    for (std::size_t i = 0; i < baked.mesh.indices.size(); ++i) {
+        const auto& f = baked.mesh.indices[i];
+        if (f(0) == f(1) || f(0) == f(2) || f(1) == f(2))
+            continue; // zero-area triangle
+        cleaned.indices.push_back(f);
+        cleaned_states.push_back(baked.triangle_states[i]);
+    }
+    baked.mesh = std::move(cleaned);
+    baked.triangle_states = std::move(cleaned_states);
+
+    if (baked.mesh.indices.empty())
+        return make_unexpected(ImagePaintError{
+            ImagePaintErrorCode::BakeInvalidGeometry,
+            "Bake produced no valid triangles after cleanup."});
+
+    if (its_num_open_edges(baked.mesh) != 0)
+        return make_unexpected(ImagePaintError{
+            ImagePaintErrorCode::BakeInvalidGeometry,
+            "Baked mesh is not manifold (open edges present)."});
+
+    const TriangleMesh check_mesh(baked.mesh);
+    if (MeshBoolean::cgal::does_self_intersect(check_mesh))
+        return make_unexpected(ImagePaintError{
+            ImagePaintErrorCode::BakeInvalidGeometry,
+            "Baked mesh self-intersects."});
+
+    return baked;
 }
 
 } // namespace Slic3r::ImagePaint

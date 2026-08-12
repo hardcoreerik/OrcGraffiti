@@ -32,6 +32,8 @@ enum class ImagePaintErrorCode : std::uint32_t {
     ApplyFailed,
     // Internal
     InternalInvariantViolation,
+    // Bake (real-geometry) errors — see MeshBake.hpp
+    BakeInvalidGeometry,
 };
 
 struct ImagePaintError {

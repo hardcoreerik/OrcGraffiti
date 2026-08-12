@@ -428,6 +428,47 @@ this real-world evidence — noted, not started.
 GUI DLL rebuilt, full `ALL_BUILD` clean, 104/104 ImagePaint tests still
 green (no core pipeline logic touched, only gizmo-side UI clamping).
 
+## Bake Stage 2 landed: validate/repair pipeline
+
+`validate_baked_mesh()` added to `MeshBake.hpp/.cpp` — takes
+`bake_candidate_mesh()`'s output and, before any commit is attempted:
+
+1. Drops zero-area triangles, **in lockstep with `triangle_states`** (a
+   hand-rolled filter, not `its_remove_degenerate_faces()`, specifically
+   because that function doesn't expose which indices it dropped — would
+   have silently desynced geometry from color).
+2. Checks manifoldness via `its_num_open_edges() == 0`.
+3. Checks self-intersection via `MeshBoolean::cgal::does_self_intersect()`.
+4. Returns a new `ImagePaintErrorCode::BakeInvalidGeometry` if either check
+   still fails.
+
+**Deliberately did not wire in automatic CGAL repair** (plan §8 step 4,
+`MeshBoolean::cgal::repair()`), despite it being called out as available
+infrastructure. Reason found while implementing, not anticipated in the
+plan: `repair()`'s pipeline does a boolean self-union to keep only the
+outer shell — it does not preserve a stable per-triangle correspondence
+with its input. There is currently no safe way to carry `triangle_states`
+through it without risking triangles ending up with the WRONG color,
+which would be a silent correctness bug, strictly worse than a loud
+failure. Since `bake_candidate_mesh()` already extracts geometry through
+`TriangleSelector::get_facets_strict()` — the same call every other paint
+gizmo's export path relies on to produce manifold, T-junction-free output
+from a manifold input — hitting this validation failure in practice is
+expected to be rare. Documented as a real gap: revisit only with an actual
+color-preserving remap design (something like `remap_painting`'s
+spatial-overlap approach, but applied to raw per-triangle state), not by
+blindly calling `repair()`.
+
+3 new tests: valid mesh passes through unchanged; a degenerate triangle
+with a distinctive bogus color gets dropped and does NOT leak into the
+result (the specific desync bug the lockstep filter exists to prevent);
+a deliberately non-manifold mesh (one triangle removed from a closed cube)
+is correctly rejected with `BakeInvalidGeometry`. 107/107
+ImagePaint+TriangleSelector+MeshBake cases, full `ALL_BUILD` clean.
+
+Stage 3 (the actual commit transaction into a live `ModelVolume`) is next
+and not yet started.
+
 ## Next Three Tasks
 
 1. Waiting on the user's live GUI test of the Image Paint gizmo (launched

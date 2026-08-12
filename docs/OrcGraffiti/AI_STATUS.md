@@ -318,6 +318,48 @@ starting with the cheapest option (materialize the already-computed virtual
 leaves as real geometry — no new subdivision math needed for v1). Explicitly
 NOT started — plan awaits review before any implementation.
 
+**Update — implementation started, per explicit user go-ahead.** User
+pushed back further on one point: the "warn if paint remap drops
+significant area" safety net (plan §9) was deferred rather than built
+proactively — "let's see if this happens before you worry so much about
+it," given nearly every MakerWorld output the user has tested has produced
+accurate results. Correct call: that check can be added later if real
+testing ever shows the problem, not before.
+
+**Stage 1 (plan §12) landed**: `bake_candidate_mesh()` in new
+`src/libslic3r/ImagePaint/MeshBake.{hpp,cpp}` materializes a
+`FacePaintPlan`'s existing `detail_leaf_states` as real geometry — Option 1
+from plan §4 (reuse Stage A's leaves verbatim, no new subdivision math).
+Implementation turned out simpler than the plan anticipated: replays the
+same deterministic `subdivide_facet_uniform`/`collect_leaves`/`set_leaf_state`
+sequence Apply already uses, then exports via
+`TriangleSelector::get_facets_strict(state)` — a function that already
+triangulates T-junctions correctly across face boundaries (confirmed by
+reading its implementation: it walks every original facet's current split
+state and stitches boundaries via `get_facets_split_by_tjoints`, the exact
+"genuinely difficult" problem plan §8/§13 flagged as having no reusable
+general-purpose utility — turns out one exists, scoped to `TriangleSelector`'s
+own tree, which is exactly what we're exporting from). No barycentric math
+had to be hand-written — edge bisection in `subdivide_facet_uniform`
+already guarantees new vertices stay on the original face's plane.
+
+4 new tests (`tests/libslic3r/test_mesh_bake.cpp`): no-detail-leaves
+fallback reproduces original topology exactly; detail leaves materialize
+as real, `its_num_open_edges() == 0` (still manifold) geometry with both
+painted colors present as real triangles; every new vertex lands on one of
+the cube's six original planes (shape-preservation proof); empty-mesh
+error case. 104/104 `[ImagePaint]`/`[TriangleSelector]`/`[MeshBake]`
+Catch2 cases, full `ALL_BUILD` clean.
+
+**Not yet done**: Stage 2 (validate/repair pipeline — `its_num_open_edges`/
+`MeshBoolean::cgal::repair()` wiring, currently only exercised implicitly
+by the test fixture happening to stay manifold) and Stage 3 (the actual
+commit transaction into a live `ModelVolume` — `set_mesh`/`save_painting`/
+`restore_painting`/`take_snapshot`/`changed_mesh` — plus GUI "Bake" action).
+`bake_candidate_mesh()` is pure, headless, and not wired into
+`ImagePaintJob`/`GLGizmoImagePainter` yet — nothing user-visible has
+changed in the running app from this update.
+
 ## Next Three Tasks
 
 1. Waiting on the user's live GUI test of the Image Paint gizmo (launched

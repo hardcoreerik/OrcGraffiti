@@ -48,6 +48,8 @@ set(lisbslic3r_sources
     ImagePaint/PaintStateMerge.cpp
     ImagePaint/ImagePaintPipeline.hpp
     ImagePaint/ImagePaintPipeline.cpp
+    ImagePaint/MeshBake.hpp
+    ImagePaint/MeshBake.cpp
     AABBMesh.cpp
     AABBMesh.hpp
     AABBTreeIndirect.hpp

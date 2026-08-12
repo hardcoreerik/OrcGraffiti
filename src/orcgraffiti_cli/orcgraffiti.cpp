@@ -43,7 +43,7 @@ void print_help()
         "  version              Print version / build type\n"
         "  help                 Show this help\n"
         "  info <input>         Inspect a model/project (JSON)\n"
-        "  paint <input>        Run the paint pipeline (dry-run only for now)\n"
+        "  paint <input>        Run the paint pipeline (--dry-run report, or --out write)\n"
         "\n"
         "Global options:\n"
         "  --report <path.json> Write machine-readable report to a file\n"

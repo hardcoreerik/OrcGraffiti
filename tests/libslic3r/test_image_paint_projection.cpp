@@ -405,3 +405,104 @@ TEST_CASE("project_cylindrical is continuous across the seam for a full wrap", "
     CHECK(just_before.u > 0.99);
     CHECK(just_after.u  < 0.01);
 }
+
+// ---------------------------------------------------------------------------
+// project_spherical — known-point checks
+// ---------------------------------------------------------------------------
+
+static SphericalProjectionSettings default_sph_proj()
+{
+    auto fr = make_cylinder_frame(Vec3d(0, 0, 1), Vec3d(1, 0, 0), Vec3d::Zero());
+    REQUIRE(fr.has_value());
+
+    SphericalProjectionSettings s;
+    s.frame = *fr;
+    s.seam_angle_radians = 0.0;
+    s.wrap_angle_radians = 2.0 * PI;
+    return s;
+}
+
+TEST_CASE("project_spherical maps the north pole to v=0", "[ImagePaint][Projection][Spherical]")
+{
+    auto s = default_sph_proj();
+    const auto pp = project_spherical(Vec3d(0, 0, 10), s);
+
+    CHECK_THAT(pp.v, WithinAbs(0.0, 1e-10));
+}
+
+TEST_CASE("project_spherical maps the south pole to v=1", "[ImagePaint][Projection][Spherical]")
+{
+    auto s = default_sph_proj();
+    const auto pp = project_spherical(Vec3d(0, 0, -10), s);
+
+    CHECK_THAT(pp.v, WithinAbs(1.0, 1e-10));
+}
+
+TEST_CASE("project_spherical maps the equator at the seam angle to u=0.5, v=0.5", "[ImagePaint][Projection][Spherical]")
+{
+    auto s = default_sph_proj();
+    const auto pp = project_spherical(Vec3d(10, 0, 0), s);
+
+    CHECK_THAT(pp.u, WithinAbs(0.5, 1e-10));
+    CHECK_THAT(pp.v, WithinAbs(0.5, 1e-10));
+    CHECK(pp.inside);
+}
+
+TEST_CASE("project_spherical maps a quarter turn on the equator to u=0.75", "[ImagePaint][Projection][Spherical]")
+{
+    auto s = default_sph_proj();
+    const auto pp = project_spherical(Vec3d(0, 10, 0), s);
+
+    CHECK_THAT(pp.u, WithinAbs(0.75, 1e-10));
+    CHECK_THAT(pp.v, WithinAbs(0.5, 1e-10));
+}
+
+TEST_CASE("project_spherical excludes points outside the radius range", "[ImagePaint][Projection][Spherical]")
+{
+    auto s = default_sph_proj();
+    s.min_radius_mm = 8.0;
+    s.max_radius_mm = 12.0;
+
+    const auto outer_ok  = project_spherical(Vec3d(10, 0, 0), s);
+    const auto too_small = project_spherical(Vec3d(2, 0, 0), s);
+    const auto too_large = project_spherical(Vec3d(20, 0, 0), s);
+
+    CHECK(outer_ok.inside);
+    CHECK(!too_small.inside);
+    CHECK(!too_large.inside);
+}
+
+TEST_CASE("project_spherical returns not-inside for a point at the sphere centre", "[ImagePaint][Projection][Spherical]")
+{
+    auto s = default_sph_proj();
+    const auto pp = project_spherical(Vec3d(0, 0, 0), s);
+
+    CHECK(!pp.inside);
+}
+
+TEST_CASE("project_spherical partial wrap excludes points beyond the wrap angle", "[ImagePaint][Projection][Spherical]")
+{
+    auto s = default_sph_proj();
+    s.wrap_angle_radians = PI; // paint only a 180-degree longitude slice
+
+    const auto front = project_spherical(Vec3d(10, 0, 0), s);   // 0 degrees
+    const auto side   = project_spherical(Vec3d(0, 10, 0), s);   // 90 degrees — edge
+    const auto back    = project_spherical(Vec3d(-10, 0, 0), s); // 180 degrees — outside
+
+    CHECK(front.inside);
+    CHECK(side.inside);
+    CHECK(!back.inside);
+}
+
+TEST_CASE("project_spherical is continuous across the seam for a full wrap", "[ImagePaint][Projection][Spherical]")
+{
+    auto s = default_sph_proj();
+    const double eps = 1e-4;
+    const auto just_before = project_spherical(
+        Vec3d(10 * std::cos(PI - eps), 10 * std::sin(PI - eps), 0), s);
+    const auto just_after = project_spherical(
+        Vec3d(10 * std::cos(-PI + eps), 10 * std::sin(-PI + eps), 0), s);
+
+    CHECK(just_before.u > 0.99);
+    CHECK(just_after.u  < 0.01);
+}

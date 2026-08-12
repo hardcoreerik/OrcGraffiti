@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cassert>
 #include <limits>
+#include <algorithm>
 
 namespace Slic3r::ImagePaint {
 
@@ -233,6 +234,36 @@ ProjectedPoint project_cylindrical(const Vec3d&                          p,
     // meaning without a nominal cylinder radius, so report the raw radial
     // distance from the axis — callers filtering by depth for occlusion can
     // combine this with min/max_radius_mm.
+    return ProjectedPoint{ru, rv, radius, inside};
+}
+
+ProjectedPoint project_spherical(const Vec3d&                        p,
+                                  const SphericalProjectionSettings& s)
+{
+    const Vec3d d      = p - s.frame.origin;
+    const double radius = d.norm();
+    if (radius < 1e-12)
+        return ProjectedPoint{0.5, 0.5, 0.0, false}; // point at sphere centre — no defined direction
+
+    const Vec3d dir = d / radius;
+
+    const double longitude = std::atan2(dir.dot(s.frame.tangent),
+                                         dir.dot(s.frame.radial_basis));
+    const double latitude  = std::asin(std::clamp(dir.dot(s.frame.axis), -1.0, 1.0));
+
+    const double dtheta = wrap_to_pi(longitude - s.seam_angle_radians);
+    const double wrap    = (s.wrap_angle_radians > 1e-9) ? s.wrap_angle_radians : 2.0 * PI;
+
+    double u = 0.5 + dtheta / wrap;
+    double v = 0.5 - latitude / PI;
+
+    auto [ru, rv] = apply_rotation_mirror(u, v, 0.0, s.mirror_u, s.mirror_v);
+
+    const bool radius_ok = radius >= s.min_radius_mm && radius <= s.max_radius_mm;
+    const bool inside = radius_ok &&
+                         (ru >= 0.0 && ru <= 1.0 &&
+                          rv >= 0.0 && rv <= 1.0);
+
     return ProjectedPoint{ru, rv, radius, inside};
 }
 

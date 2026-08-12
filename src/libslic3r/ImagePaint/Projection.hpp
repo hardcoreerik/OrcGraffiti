@@ -162,4 +162,42 @@ make_cylinder_frame(const Vec3d& axis_direction,
 ProjectedPoint project_cylindrical(const Vec3d&                          p,
                                     const CylindricalProjectionSettings& s);
 
+// ---------------------------------------------------------------------------
+// Phase 7 — Spherical projection (Roadmap.md §11).
+// ---------------------------------------------------------------------------
+
+// Settings for a spherical (equirectangular) projection onto the mesh
+// surface. Reuses CylinderFrame: origin is the sphere centre, axis is the
+// polar axis, radial_basis/tangent define the equatorial "0 longitude"
+// reference frame — built the same way via make_cylinder_frame.
+// All distances in millimetres, all angles in radians.
+struct SphericalProjectionSettings {
+    CylinderFrame frame;
+
+    // seam_angle_radians names the longitude that maps to u=0.5, same
+    // "front reference direction" convention as CylindricalProjectionSettings.
+    double seam_angle_radians = 0.0;
+
+    // Total longitude extent mapped across u in [0,1]. 2*pi = full wrap.
+    double wrap_angle_radians = 2.0 * PI;
+
+    // Points whose radial distance from the centre falls outside this
+    // range are excluded — used to filter concentric shells (e.g. a
+    // double-walled sphere) from the intended outer surface.
+    double min_radius_mm = 0.0;
+    double max_radius_mm = std::numeric_limits<double>::infinity();
+
+    bool mirror_u = false;
+    bool mirror_v = false;
+};
+
+// Project a single point from the coordinate space of the frame.
+// p must already be in the same space as frame.origin/axes.
+// Latitude maps to v: the +axis pole is v=0 (top), the -axis pole is v=1
+// (bottom), the equator is v=0.5 — mirrors project_cylindrical's height/v
+// convention. A point exactly at the frame origin (undefined direction)
+// returns inside=false.
+ProjectedPoint project_spherical(const Vec3d&                        p,
+                                  const SphericalProjectionSettings& s);
+
 } // namespace Slic3r::ImagePaint

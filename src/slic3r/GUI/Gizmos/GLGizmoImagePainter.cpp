@@ -31,6 +31,12 @@
 
 namespace Slic3r::GUI {
 
+// Upper bound of the "Size" slider (percent). See build_view_preset_projection's
+// kSizeReferenceScale comment — 100% is rebased to a usable default, so this
+// needs to extend well past 100 for users who deliberately want to cover
+// most/all of a large object.
+static constexpr float kSizeSliderMax = 300.f;
+
 // ---------------------------------------------------------------------------
 
 GLGizmoImagePainter::GLGizmoImagePainter(GLCanvas3D&        parent,
@@ -177,17 +183,30 @@ GLGizmoImagePainter::build_view_preset_projection(const std::vector<Vec3f>& vert
         return std::nullopt;
     }
 
-    // fit_planar_projection centres frame.origin on the fitted extent, so
-    // scaling width/height in place shrinks/grows symmetrically around that
-    // same centre — matches a "Size" slider's expected behavior.
-    const double scale = std::clamp(static_cast<double>(m_size_percent), 1.0, 100.0) / 100.0;
+    // fit_planar_projection's raw result covers the ENTIRE mesh silhouette
+    // (margin 1.02) — on a large flat object that's almost always too big
+    // for a normal image (mostly background, actual content squeezed into a
+    // sliver). Empirically the usable range for a typical image on a large
+    // panel sits around 25-30% of that raw fit, so "Size 100%" is rebased to
+    // land there by default instead of forcing users to hunt near the bottom
+    // of the slider. kSizeReferenceScale is exactly that rebasing factor —
+    // the slider's range (kSizeSliderMax below) is widened accordingly so
+    // covering the whole object is still reachable for users who want it.
+    constexpr double kSizeReferenceScale = 0.30;
+    const double scale = std::clamp(static_cast<double>(m_size_percent), 1.0, static_cast<double>(kSizeSliderMax)) / 100.0
+                        * kSizeReferenceScale;
     fitted->width_mm  *= scale;
     fitted->height_mm *= scale;
     fitted->rotation_radians = static_cast<double>(m_rotation_deg) * PI / 180.0;
     fitted->mirror_u = m_mirror_u;
     // Allow somewhat oblique faces; 0.1 was excluding useful surface on organic meshes.
     fitted->front_face_cosine_threshold = 0.05;
-    fitted->minimum_coverage = 0.25;
+    // Lower than the old 0.25: that threshold excluded a face OUTRIGHT once
+    // less than a quarter of it was covered, so shrinking Size below the
+    // sweet spot made the image disappear face-by-face rather than fading
+    // out gradually. 0.05 lets small/edge coverage still paint what little
+    // of the image actually lands there.
+    fitted->minimum_coverage = 0.05;
 
     return *fitted;
 }
@@ -334,7 +353,11 @@ void GLGizmoImagePainter::apply()
                 return;
             }
             fitted->front_face_cosine_threshold = 0.05;
-            fitted->minimum_coverage = 0.25;
+            // Consistent with the View-preset path (see kSizeReferenceScale's
+            // comment) — 0.25 excluded a face outright once less than a
+            // quarter of it was covered, making small/edge placements
+            // disappear face-by-face rather than fading out gradually.
+            fitted->minimum_coverage = 0.05;
             req.projection = *fitted;
             m_width_mm  = static_cast<float>(fitted->width_mm);
             m_height_mm = static_cast<float>(fitted->height_mm);
@@ -349,7 +372,11 @@ void GLGizmoImagePainter::apply()
             fitted->width_mm  = m_width_mm;
             fitted->height_mm = m_height_mm;
             fitted->front_face_cosine_threshold = 0.05;
-            fitted->minimum_coverage = 0.25;
+            // Consistent with the View-preset path (see kSizeReferenceScale's
+            // comment) — 0.25 excluded a face outright once less than a
+            // quarter of it was covered, making small/edge placements
+            // disappear face-by-face rather than fading out gradually.
+            fitted->minimum_coverage = 0.05;
             req.projection = *fitted;
         }
     }
@@ -440,10 +467,14 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
     }
 
     // --- Size / Rotation ---
+    // Range extended past 100 — see kSizeReferenceScale in
+    // build_view_preset_projection(): 100% is rebased to a usable default
+    // size, not "cover the whole object", so reaching that (for users who
+    // deliberately want it) needs headroom beyond 100.
     m_imgui->text(_L("Size"));
     ImGui::SameLine(unit * 8.f);
     ImGui::PushItemWidth(unit * 14.f);
-    ImGui::SliderFloat("##size", &m_size_percent, 1.f, 100.f, "%.0f%%");
+    ImGui::SliderFloat("##size", &m_size_percent, 1.f, kSizeSliderMax, "%.0f%%");
     ImGui::PopItemWidth();
 
     m_imgui->text(_L("Rotate"));

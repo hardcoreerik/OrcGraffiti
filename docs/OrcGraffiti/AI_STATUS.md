@@ -516,6 +516,37 @@ local space independent of camera orientation; this just means the user
 is now actually looking at the face they just told the tool to paint.
 GUI DLL rebuilt, full `ALL_BUILD` clean.
 
+## "Too many constraints" — Size% rebased, coverage cutoff relaxed
+
+User confirmed the hypothesis by testing: dropping Size to ~25-30% on the
+large panel produced the correct, legible result; anything much smaller
+made the image disappear, anything bigger went solid black. Root cause
+confirmed exactly as suspected — Size 100% meant "cover the whole mesh
+silhouette" (`fit_planar_projection` margin 1.02), and the actual usable
+window sat in a narrow band near the bottom of a 1-100 slider. User's
+framing: "seems like we have too many constraints" — right call, this was
+a UX defect, not a tuning question for the user to fight through.
+
+Two fixes in `build_view_preset_projection()`:
+
+1. **Rebased what "100%" means.** New `kSizeReferenceScale = 0.30`
+   multiplies the raw full-coverage fit before the user's Size% is
+   applied, so the *default* (100%) lands where testing showed it
+   actually works, instead of requiring users to hunt near the bottom of
+   the range. Slider's range widened to 1-300% (`kSizeSliderMax`) so
+   covering the whole object is still reachable for anyone who
+   deliberately wants that — nothing lost, just re-centered.
+2. **Lowered `minimum_coverage` from 0.25 to 0.05**, in both the
+   View-preset and legacy camera-facing paths. 0.25 excluded a face
+   *outright* once less than a quarter of it was covered by the image —
+   which is why shrinking Size made the result vanish abruptly rather
+   than fade out. 0.05 lets partial/edge coverage still paint whatever
+   fraction of the image actually lands there.
+
+GUI DLL rebuilt, full `ALL_BUILD` clean. Not yet re-tested by the user —
+next recording should show a much wider comfortable range around the
+default instead of a razor-thin sweet spot.
+
 ## Next Three Tasks
 
 1. Waiting on the user's live GUI test of the Image Paint gizmo (launched

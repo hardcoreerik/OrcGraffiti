@@ -559,12 +559,26 @@ int cmd_paint(const PaintOptions& opt)
             if (!inst->is_assemble_initialized())
                 inst->set_assemble_transformation(inst->get_transformation());
 
+    // _add_relationships_file_to_archive (bbs_3mf.cpp) unconditionally writes
+    // _rels/.rels entries pointing at "Metadata/plate_1.png" and
+    // "Metadata/plate_1_small.png" whenever no thumbnail_data is supplied —
+    // it does NOT skip the relationship when there's no file to back it.
+    // Without an actual thumbnail, the archive ends up with dangling
+    // relationship targets, which crashed real slicer software when a human
+    // opened the file (OrcaSlicer 2.4.2 and FlashForge Studio both crashed
+    // on this session's first BBS-write attempt). Supply a minimal valid
+    // placeholder (16x16 white) so _add_thumbnail_file_to_archive actually
+    // writes the files the relationships reference.
+    ThumbnailData thumbnail;
+    thumbnail.set(16, 16);
+
     StoreParams store_params;
     store_params.path            = opt.out_path;
     store_params.model           = &model;
     store_params.plate_data_list = plate_data;
     store_params.project_presets = project_presets;
     store_params.config          = &config;
+    store_params.thumbnail_data  = { &thumbnail };
     store_params.strategy        = SaveStrategy::Zip64 | SaveStrategy::UseLoadedId;
 
     const bool stored = store_bbs_3mf(store_params);

@@ -1,0 +1,8 @@
+{
+  "filaments": [
+    { "index": 0, "name": "PLA Red",   "color_hex": "#E31C23" },
+    { "index": 1, "name": "PLA Black", "color_hex": "#1A1A1A" },
+    { "index": 2, "name": "PLA White", "color_hex": "#F5F5F5" },
+    { "index": 3, "name": "PLA Skin",  "color_hex": "#C8A078" }
+  ]
+}

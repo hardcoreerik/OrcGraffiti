@@ -12,6 +12,8 @@
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r_version.h"
 #include "libslic3r/ImagePaint/TopologyFingerprint.hpp"
+#include "libslic3r/ImagePaint/ImagePaintPipeline.hpp"
+#include "libslic3r/ImagePaint/ImageDecoder.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -20,6 +22,8 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <optional>
+#include <utility>
 
 using namespace Slic3r;
 using json = nlohmann::json;
@@ -35,9 +39,22 @@ void print_help()
         "  version              Print version / build type\n"
         "  help                 Show this help\n"
         "  info <input>         Inspect a model/project (JSON)\n"
+        "  paint <input>        Run the paint pipeline (dry-run only for now)\n"
         "\n"
-        "Options:\n"
+        "Global options:\n"
         "  --report <path.json> Write machine-readable report to a file\n"
+        "\n"
+        "paint options:\n"
+        "  --image <path>       Source image (PNG/JPG/BMP), required\n"
+        "  --filaments <path>   Filament palette JSON (see Agent_Surface.md §6.7), required\n"
+        "  --object <i>         Object index (default 0)\n"
+        "  --volume <i>         Volume index within object (default 0)\n"
+        "  --view <preset>      front|back|left|right|top|bottom (default front)\n"
+        "  --colors <n>         Target quantizer colors, 1-16 (default 4)\n"
+        "  --quality <q>        fast|threepoint|gaussian7 (default gaussian7)\n"
+        "  --merge <policy>     overwrite|preserve (default overwrite)\n"
+        "  --dry-run            Run pipeline, write report only, no 3MF write (required —\n"
+        "                       write mode / --out is AS-3, not yet implemented)\n"
         "\n"
         "See docs/OrcGraffiti/Agent_Surface.md for the full CLI contract.\n";
 }
@@ -45,7 +62,7 @@ void print_help()
 void print_version()
 {
     std::cout << "orcgraffiti " << SLIC3R_VERSION
-               << " (agent-surface AS-1, ImagePaint core)\n";
+               << " (agent-surface AS-2, ImagePaint core)\n";
 }
 
 std::string hex64(std::uint64_t v)
@@ -152,6 +169,279 @@ int cmd_info(const std::string& input_path, const std::string& report_path)
     return 0;
 }
 
+// View presets, volume-local, right-handed. "front" and "top" are locked to the
+// golden-test conventions in tests/libslic3r/test_image_paint_pipeline.cpp
+// (see Agent_Surface.md §6.5 implementation note); back/left/bottom are the
+// mirror of front/right/top pending their own golden tests.
+std::optional<std::pair<Vec3d, Vec3d>> view_preset(const std::string& name)
+{
+    if (name == "front")  return std::make_pair(Vec3d(0, 1, 0),  Vec3d(0, 0, 1));
+    if (name == "back")   return std::make_pair(Vec3d(0, -1, 0), Vec3d(0, 0, 1));
+    if (name == "right")  return std::make_pair(Vec3d(-1, 0, 0), Vec3d(0, 0, 1));
+    if (name == "left")   return std::make_pair(Vec3d(1, 0, 0),  Vec3d(0, 0, 1));
+    if (name == "top")    return std::make_pair(Vec3d(0, 0, -1), Vec3d(0, 1, 0));
+    if (name == "bottom") return std::make_pair(Vec3d(0, 0, 1),  Vec3d(0, 1, 0));
+    return std::nullopt;
+}
+
+ImagePaint::SamplingQuality quality_from_string(const std::string& s)
+{
+    if (s == "fast")       return ImagePaint::SamplingQuality::FastCentroid;
+    if (s == "threepoint") return ImagePaint::SamplingQuality::ThreePoint;
+    return ImagePaint::SamplingQuality::Gaussian7;
+}
+
+ImagePaint::MergePolicy merge_from_string(const std::string& s)
+{
+    if (s == "preserve") return ImagePaint::MergePolicy::PreserveExisting;
+    return ImagePaint::MergePolicy::OverwriteInsideMask;
+}
+
+// Filament palette JSON per Agent_Surface.md §6.7:
+// { "filaments": [ { "index": 0, "name": "...", "color_hex": "#RRGGBB" }, ... ] }
+std::vector<ImagePaint::FilamentColor> load_filaments(const std::string& path)
+{
+    std::ifstream in(path);
+    if (!in)
+        throw std::runtime_error("cannot open filament palette file: " + path);
+    json j;
+    in >> j;
+
+    std::vector<ImagePaint::FilamentColor> result;
+    for (const auto& jf : j.at("filaments")) {
+        ImagePaint::FilamentColor f;
+        f.project_index = jf.at("index").get<ImagePaint::FilamentIndex>();
+        f.name = jf.value("name", std::string());
+        std::string hex = jf.at("color_hex").get<std::string>();
+        if (hex.size() == 7 && hex[0] == '#') {
+            f.display_rgb.r = static_cast<std::uint8_t>(std::stoi(hex.substr(1, 2), nullptr, 16));
+            f.display_rgb.g = static_cast<std::uint8_t>(std::stoi(hex.substr(3, 2), nullptr, 16));
+            f.display_rgb.b = static_cast<std::uint8_t>(std::stoi(hex.substr(5, 2), nullptr, 16));
+        } else {
+            throw std::runtime_error("filament '" + f.name + "' has malformed color_hex: " + hex);
+        }
+        result.push_back(f);
+    }
+    return result;
+}
+
+json diagnostics_json(const ImagePaint::PaintDiagnostics& d)
+{
+    json j;
+    j["total_faces"]              = d.total_faces;
+    j["candidate_faces"]          = d.candidate_faces;
+    j["painted_faces"]            = d.painted_faces;
+    j["transparent_faces"]        = d.transparent_faces;
+    j["back_facing_faces"]        = d.back_facing_faces;
+    j["occluded_faces"]           = d.occluded_faces;
+    j["connected_components"]     = d.connected_components;
+    j["tiny_components"]          = d.tiny_components;
+    j["painted_surface_area_mm2"] = d.painted_surface_area_mm2;
+    j["coarse_mesh_warning"]      = d.coarse_mesh_warning;
+    j["warnings"]                 = d.warnings;
+    return j;
+}
+
+json matches_json(const std::vector<ImagePaint::ClusterMatch>& matches)
+{
+    json arr = json::array();
+    for (const auto& m : matches) {
+        json jm;
+        jm["cluster_id"]      = m.cluster_id;
+        jm["filament_index"]  = m.filament_index;
+        jm["delta_e"]         = m.delta_e;
+        jm["user_overridden"] = m.user_overridden;
+        arr.push_back(std::move(jm));
+    }
+    return arr;
+}
+
+std::string error_code_name(ImagePaint::ImagePaintErrorCode code)
+{
+    using C = ImagePaint::ImagePaintErrorCode;
+    switch (code) {
+    case C::NoSelection:                   return "NoSelection";
+    case C::InvalidTarget:                 return "InvalidTarget";
+    case C::UnsupportedVolume:              return "UnsupportedVolume";
+    case C::ImageOpenFailed:               return "ImageOpenFailed";
+    case C::ImageDecodeFailed:              return "ImageDecodeFailed";
+    case C::ImageTooLarge:                 return "ImageTooLarge";
+    case C::InvalidProjection:              return "InvalidProjection";
+    case C::NoEligibleFaces:               return "NoEligibleFaces";
+    case C::NoAvailableFilaments:           return "NoAvailableFilaments";
+    case C::TooManyColors:                 return "TooManyColors";
+    case C::QuantizationFailed:             return "QuantizationFailed";
+    case C::Canceled:                      return "Canceled";
+    case C::TargetDeleted:                 return "TargetDeleted";
+    case C::TopologyChanged:               return "TopologyChanged";
+    case C::FilamentConfigurationChanged:   return "FilamentConfigurationChanged";
+    case C::FaceCountMismatch:              return "FaceCountMismatch";
+    case C::FilamentOutOfRange:             return "FilamentOutOfRange";
+    case C::ApplyFailed:                   return "ApplyFailed";
+    case C::InternalInvariantViolation:     return "InternalInvariantViolation";
+    }
+    return "Unknown";
+}
+
+struct PaintOptions {
+    std::string input_path;
+    std::string image_path;
+    std::string filaments_path;
+    std::string report_path;
+    std::size_t object_index = 0;
+    std::size_t volume_index = 0;
+    std::string view          = "front";
+    std::uint32_t colors      = 4;
+    std::string quality       = "gaussian7";
+    std::string merge         = "overwrite";
+    bool dry_run              = false;
+};
+
+int write_report_and_exit(const json& report, const std::string& report_path, int code)
+{
+    const std::string text = report.dump(2);
+    if (!report_path.empty()) {
+        std::ofstream out(report_path);
+        out << text;
+    } else {
+        std::cout << text << "\n";
+    }
+    return code;
+}
+
+// AS-2 exit gate: "paint --dry-run" returns diagnostics matching the unit
+// pipeline within tolerance, with no 3MF mutation. See Agent_Surface.md §6.8.
+int cmd_paint(const PaintOptions& opt)
+{
+    json report;
+    report["command"]  = "paint";
+    report["version"]  = "orcgraffiti-agent-surface-0.1";
+    report["input"]    = opt.input_path;
+    report["dry_run"]  = opt.dry_run;
+
+    if (!opt.dry_run) {
+        report["ok"] = false;
+        report["error"] = { {"code", "InvalidTarget"},
+                             {"message", "write mode (--out) is AS-3 and not yet implemented; pass --dry-run"} };
+        std::cerr << "orcgraffiti: paint write mode not yet implemented — pass --dry-run\n";
+        return write_report_and_exit(report, opt.report_path, 1);
+    }
+
+    Model model;
+    try {
+        model = Model::read_from_file(opt.input_path);
+    } catch (const std::exception& ex) {
+        report["ok"] = false;
+        report["error"] = { {"code", "ModelLoadFailed"}, {"message", ex.what()} };
+        std::cerr << "orcgraffiti: failed to load '" << opt.input_path << "': " << ex.what() << "\n";
+        return write_report_and_exit(report, opt.report_path, 2);
+    }
+
+    if (opt.object_index >= model.objects.size()) {
+        report["ok"] = false;
+        report["error"] = { {"code", "InvalidTarget"}, {"message", "object index out of range"} };
+        return write_report_and_exit(report, opt.report_path, 1);
+    }
+    const ModelObject* obj = model.objects[opt.object_index];
+    if (opt.volume_index >= obj->volumes.size()) {
+        report["ok"] = false;
+        report["error"] = { {"code", "InvalidTarget"}, {"message", "volume index out of range"} };
+        return write_report_and_exit(report, opt.report_path, 1);
+    }
+    const ModelVolume* vol = obj->volumes[opt.volume_index];
+    report["selection"] = { {"object_index", opt.object_index}, {"volume_index", opt.volume_index} };
+
+    const auto preset = view_preset(opt.view);
+    if (!preset) {
+        report["ok"] = false;
+        report["error"] = { {"code", "InvalidProjection"}, {"message", "unknown --view preset: " + opt.view} };
+        return write_report_and_exit(report, opt.report_path, 1);
+    }
+
+    std::vector<ImagePaint::FilamentColor> filaments;
+    try {
+        filaments = load_filaments(opt.filaments_path);
+    } catch (const std::exception& ex) {
+        report["ok"] = false;
+        report["error"] = { {"code", "NoAvailableFilaments"}, {"message", ex.what()} };
+        std::cerr << "orcgraffiti: " << ex.what() << "\n";
+        return write_report_and_exit(report, opt.report_path, 1);
+    }
+
+    const ImagePaint::ImageDecodeLimits limits;
+    auto decoded = ImagePaint::decode_image(opt.image_path, limits);
+    if (!decoded.has_value()) {
+        report["ok"] = false;
+        report["error"] = { {"code", error_code_name(decoded.error().code)},
+                             {"message", decoded.error().user_message} };
+        std::cerr << "orcgraffiti: image decode failed: " << decoded.error().user_message << "\n";
+        return write_report_and_exit(report, opt.report_path, 2);
+    }
+    report["image"] = {
+        {"path", opt.image_path},
+        {"width_px", decoded->width},
+        {"height_px", decoded->height},
+        {"aspect_w_over_h", decoded->height > 0
+            ? static_cast<double>(decoded->width) / decoded->height : 0.0}
+    };
+
+    const TriangleMesh& mesh = vol->mesh();
+    const indexed_triangle_set& its = mesh.its;
+
+    ImagePaint::ImagePaintRequest req;
+    req.vertices.assign(its.vertices.begin(), its.vertices.end());
+    req.indices.assign(its.indices.begin(), its.indices.end());
+    req.filaments        = filaments;
+    req.quantization.target_colors = opt.colors;
+    req.quality           = quality_from_string(opt.quality);
+    req.merge_policy       = merge_from_string(opt.merge);
+    req.cleanup.enabled    = true;
+
+    const double aspect = decoded->height > 0
+        ? static_cast<double>(decoded->width) / decoded->height : 0.0;
+    auto fitted = ImagePaint::fit_planar_projection(
+        ImagePaint::Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
+        preset->first, preset->second, aspect, 1.02);
+    if (!fitted.has_value()) {
+        report["ok"] = false;
+        report["error"] = { {"code", error_code_name(fitted.error().code)},
+                             {"message", fitted.error().user_message} };
+        return write_report_and_exit(report, opt.report_path, 2);
+    }
+    req.projection = *fitted;
+    req.projection.front_face_cosine_threshold = 0.05;
+    req.projection.minimum_coverage            = 0.25;
+
+    report["projection"] = {
+        {"space", "mesh-local"},
+        {"auto_fit", true},
+        {"look", {preset->first.x(), preset->first.y(), preset->first.z()}},
+        {"up",   {preset->second.x(), preset->second.y(), preset->second.z()}},
+        {"width_mm", req.projection.width_mm},
+        {"height_mm", req.projection.height_mm},
+        {"front_face_cosine_threshold", req.projection.front_face_cosine_threshold},
+        {"minimum_coverage", req.projection.minimum_coverage}
+    };
+    report["fingerprint"] = fingerprint_json(its);
+
+    const auto result = ImagePaint::run_image_paint(req, *decoded);
+    if (!result.has_value()) {
+        report["ok"] = false;
+        report["error"] = { {"code", error_code_name(result.error().code)},
+                             {"message", result.error().user_message},
+                             {"detail", result.error().technical_detail} };
+        std::cerr << "orcgraffiti: paint pipeline failed: " << result.error().user_message << "\n";
+        return write_report_and_exit(report, opt.report_path, 2);
+    }
+
+    report["ok"]          = true;
+    report["diagnostics"] = diagnostics_json(result->diagnostics);
+    report["matches"]     = matches_json(result->matches);
+    report["error"]       = nullptr;
+
+    return write_report_and_exit(report, opt.report_path, 0);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -193,6 +483,41 @@ int main(int argc, char** argv)
             return 1;
         }
         return cmd_info(input_path, report_path);
+    }
+    if (command == "paint") {
+        if (args.size() < 2) {
+            std::cerr << "orcgraffiti: 'paint' requires an input path\n";
+            print_help();
+            return 1;
+        }
+        PaintOptions opt;
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            const std::string& a = args[i];
+            if (a == "--report" && i + 1 < args.size())        opt.report_path     = args[++i];
+            else if (a == "--image" && i + 1 < args.size())    opt.image_path      = args[++i];
+            else if (a == "--filaments" && i + 1 < args.size()) opt.filaments_path = args[++i];
+            else if (a == "--object" && i + 1 < args.size())   opt.object_index    = std::stoul(args[++i]);
+            else if (a == "--volume" && i + 1 < args.size())   opt.volume_index    = std::stoul(args[++i]);
+            else if (a == "--view" && i + 1 < args.size())     opt.view            = args[++i];
+            else if (a == "--colors" && i + 1 < args.size())   opt.colors          = static_cast<std::uint32_t>(std::stoul(args[++i]));
+            else if (a == "--quality" && i + 1 < args.size())  opt.quality         = args[++i];
+            else if (a == "--merge" && i + 1 < args.size())    opt.merge           = args[++i];
+            else if (a == "--dry-run")                         opt.dry_run         = true;
+            else if (opt.input_path.empty())                   opt.input_path      = a;
+        }
+        if (opt.input_path.empty()) {
+            std::cerr << "orcgraffiti: 'paint' requires an input path\n";
+            return 1;
+        }
+        if (opt.image_path.empty()) {
+            std::cerr << "orcgraffiti: 'paint' requires --image\n";
+            return 1;
+        }
+        if (opt.filaments_path.empty()) {
+            std::cerr << "orcgraffiti: 'paint' requires --filaments\n";
+            return 1;
+        }
+        return cmd_paint(opt);
     }
 
     std::cerr << "orcgraffiti: unknown command '" << command << "'\n";

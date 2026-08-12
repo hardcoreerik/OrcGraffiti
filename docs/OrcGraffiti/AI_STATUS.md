@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 6+ mapping quality green. **Agent Surface AS-1 and AS-2 implemented and tested.**
+Phase 6+ mapping quality green. **Agent Surface AS-1, AS-2, AS-3 (v1 scope) implemented and tested.**
 
 ## Current Branch
 
@@ -22,83 +22,68 @@ feature/image-paint-phase1-types
 
 - ImagePaint unit tests: **69/69** (incl. garth.jpg integration when present)
 - Full app: Release `orca-slicer.exe` builds
-- `orcgraffiti.exe`: `version`, `help`, `info`, `paint --dry-run` — links libslic3r only
-- ctest: 19/19 green (15 ImagePaint core + 4 orcgraffiti CLI contract tests)
+- `orcgraffiti.exe`: `version`, `help`, `info`, `paint --dry-run`, `paint --out` — links libslic3r only
+- ctest: **21/21 green** (15 ImagePaint core + 6 orcgraffiti CLI contract tests)
 - Sample image: `C:\Users\hardc\OneDrive\Pictures\garth.jpg`
 
 ## Active Task
 
-AS-3: `orcgraffiti paint --out <path.3mf>` — write mode. **Attempted and
-reverted this loop** — the naive implementation (steps 1-5 of the prior
-plan) built and ran without crashing, but produces 3MF files that
-`load_bbs_3mf` cannot reopen. Root cause is only partly isolated; see
-findings below. Currently still rejected with a clear "not yet implemented"
-error (see `cmd_paint` in `src/orcgraffiti_cli/orcgraffiti.cpp`) — reverted
-rather than shipped broken.
+AS-3 landed at **v1 scope** (user-decided, not autonomous): `paint --out`
+writes a plain (non-BBS) 3MF via `Slic3r::store_3mf`, not the BBS-native
+`store_bbs_3mf`. Next candidate work is AS-4 (skill file) or revisiting
+AS-3's BBS-format gap — see "Known limitation" below before starting either.
 
-**AS-3 investigation findings (2026-08-11, this loop):**
+**Two bugs found and resolved this session (2026-08-11):**
 
-1. `Model::read_from_file` with real `DynamicPrintConfig*` /
-   `ConfigSubstitutionContext*` / `PlateDataPtrs*` / `vector<Preset*>*` and
-   `store_bbs_3mf(StoreParams&)` with `SaveStrategy::Zip64` do run without
-   crashing, and the `paint_color` attributes land correctly in
-   `3D/3dmodel.model` (verified by hand-inspecting the written zip).
-2. **Bug A (confirmed, understood):** for non-3MF inputs (STL/OBJ), the
-   loaded `PlateDataPtrs` is empty (no BBS plate structure exists in an
-   STL). Passing an empty `plate_data_list` straight to `store_bbs_3mf`
-   writes a `Metadata/model_settings.config` with **no `<plate>` element at
-   all**. `load_bbs_3mf` requires a `<plate>` entry listing
-   object/instance indices to populate `model.objects` on reopen — without
-   one, the reload sees zero objects and reports
-   `"The supplied file couldn't be read because it's empty."`
-   **Fix attempted:** synthesize a single default `PlateData(0, {(object
-   array-index, instance array-index)...}, false)` when `plate_data` is
-   empty before calling `store_bbs_3mf`. `PartPlate.cpp:2755-2759`
-   confirms `objects_and_instances` pairs are `model.objects[]` array
-   indices, not `ObjectID`s — the synthesized plate matched this
-   convention.
-3. **Bug B (reproduced, NOT isolated):** even with Bug A's fix — a
-   correctly-shaped `<plate>` element written, with
-   `model_instance/object_id` matching the actual XML resource id used by
-   `<build><item objectid="…">` (verified by hand-inspecting the zip a
-   second time after the fix) — reload **still** fails, now with
-   `"can not find object from plate's obj_map, id=2, skip this object"`
-   from `_BBS_3MF_Importer::_load_model_from_file` (around
-   `src/libslic3r/Format/bbs_3mf.cpp:2363`), then the same empty-model
-   error. The importer builds its own `obj_map` (XML resource id → parsed
-   object) while parsing `3D/3dmodel.model`, and for reasons not yet
-   understood does not find id=2 in it even though `<object id="2">`
-   exists in the same file. Plausible causes not yet checked: an
-   `identify_id`/backup-id field our synthesized `ModelInstance`s lack
-   (the written config showed `identify_id value="14"` — unclear if that's
-   expected or a symptom); a `type=` attribute the importer expects on
-   `<object>` that differs between the "part" object (id=1) and the
-   "instance-wrapper" object (id=2); or an ordering/two-pass requirement
-   in the importer that a single freshly-`new`'d `Model` (not gone through
-   `Plater`'s live `PartPlateList`) doesn't satisfy.
-4. Reverted both `src/orcgraffiti_cli/orcgraffiti.cpp` and
-   `src/CMakeLists.txt` write-mode changes rather than commit a feature
-   that silently produces unopenable project files. `git diff` was clean
-   before the next task began.
+1. **Fixed — `LoadStrategy` bug, pre-existing since AS-1, affects ANY `.3mf`
+   input:** `Model::read_from_file`'s default `LoadStrategy`
+   (`AddDefaultInstances` alone) omits `LoadModel`/`LoadConfig`, so the BBS
+   3MF importer silently returns zero objects for `.3mf` inputs — no error,
+   just `"The supplied file couldn't be read because it's empty."` Fixed
+   via `full_load_strategy()` (matches `OrcaSlicer.cpp`'s own CLI flags),
+   used by both `info` and `paint`. Locked in by
+   `orcgraffiti_cli_info_3mf_fixture` in `src/CMakeLists.txt`, against
+   `tests/orcgraffiti_cli/fixtures/sample_project.3mf`.
+2. **Not fixed — BBS 3MF writer (`store_bbs_3mf`) round-trip bug:**
+   attempted in an earlier pass this session, found two issues (missing
+   `<plate>` element for non-3MF inputs; then an unresolved
+   `_BBS_3MF_Importer::_load_model_from_file` `obj_map` lookup failure even
+   after fixing the first). **User decided to narrow AS-3 v1 scope** rather
+   than keep debugging: write plain (non-BBS) 3MF via `store_3mf` instead.
+   The BBS-format writer path remains unimplemented; if it's ever needed
+   (e.g. to preserve BBS/Orca project profile/plate data on `--out`), the
+   investigation notes are preserved in git history
+   (`948a91071f` "docs: AS-3 investigation findings").
 
-**Recommended next approach:** debug `_BBS_3MF_Importer::_load_model_from_file`
-interactively (breakpoint at the `bbs_3mf.cpp:2363` warning) comparing a
-real Orca-saved single-object 3MF against our CLI-written one byte-for-byte
-in `Metadata/model_settings.config` and `3D/3dmodel.model`, OR sidestep the
-BBS plate format entirely for CLI-written output by using the plain
-`store_3mf` (from `Format/3mf.hpp`, non-BBS) for STL/OBJ inputs where no
-existing project structure needs preserving — trading "importable back into
-this same fork's BBS-aware reader" for "importable by any 3MF-compliant
-tool," which may be an acceptable v1 scope narrowing worth discussing with
-the user rather than assuming.
+**Known limitation of the v1 scope (document, don't silently accept):**
+`store_3mf` writes the Prusa/Slic3r-family `slic3rpe:mmu_segmentation`
+triangle attribute. This CLI's own `info`/`paint --dry-run` always read
+`.3mf` via `Model::read_from_file` → `load_bbs_3mf`, which only recognizes
+the BBS-native `paint_color` attribute — so `has_mmu_paint` reads back
+`false` on a CLI-painted `--out` file even though the attribute is present
+(hand-verified in the raw zip: `triangle ... slic3rpe:mmu_segmentation="0C"`).
+**Tried switching the CLI's own reader to `Model::read_from_archive`** (the
+real GUI "Open Project" path in `Plater.cpp:6897`, which does Prusa/generic-
+3MF detection via `PrusaFileParser::check_3mf_from_prusa` and would read
+this attribute correctly) **to fix the self-check — it segfaults**, even on
+a known-good pre-existing fixture, before and after any of our changes.
+Reverted that attempt immediately. **A manual GUI reopen check is currently
+the only way to confirm a `--out` file actually shows paint.** Mesh
+geometry and topology fingerprint DO round-trip exactly — verified via
+`info` on the CLI's own output matching the input STL's fingerprint
+bit-for-bit.
 
 ## Next Three Tasks
 
-1. Debug or scope-narrow AS-3 per the investigation findings above —
-   this needs either interactive debugging of the BBS 3MF importer or a
-   product decision (ask the user) about narrowing AS-3's v1 output format.
-2. Once AS-3 lands: ask for a manual GUI reopen check on a real 3MF with
-   `--out` paint applied
+1. Ask for a manual GUI reopen check on a real `paint --out` file (e.g.
+   `orcgraffiti paint tests/orcgraffiti_cli/fixtures/unit_cube.stl --image
+   <path> --filaments tests/orcgraffiti_cli/fixtures/filaments.json --out
+   /tmp/test.3mf`, then open `/tmp/test.3mf` in Orca) to confirm the
+   `slic3rpe:mmu_segmentation` paint is actually visible — this is AS-3's
+   real exit gate, not the CLI's own (currently broken) self-check.
+2. AS-4: write `docs/OrcGraffiti/skills/orcgraffiti-cli/SKILL.md`'s real
+   content (currently a template) now that `info`/`paint --dry-run`/`paint
+   --out` all exist and are tested.
 3. Keep PR #1 updated; GUI retest auto-fit paint with garth.jpg when convenient
 
 ## Open PRs
@@ -107,9 +92,9 @@ https://github.com/hardcoreerik/OrcGraffiti/pull/1
 
 ## Updated
 
-2026-08-11 — AS-3 write path attempted, two bugs found in 3MF round-trip
-(missing plate structure; unresolved `obj_map` lookup failure even after
-fixing the first), reverted rather than shipped broken. AS-2
-`paint --dry-run` (landed earlier this session) is unaffected and remains
-the current CLI capability ceiling. v0.1.0-alpha tagged and released on
-GitHub earlier this session.
+2026-08-11 — Fixed a `LoadStrategy` bug affecting all `.3mf` reads (pre-
+existing since AS-1). Landed AS-3 at v1 scope (plain 3MF write via
+`store_3mf`, user-decided after the BBS writer proved buggy) — geometry/
+fingerprint round-trip verified; paint-attribute self-check remains broken
+(documented) pending a `read_from_archive` segfault fix or a manual GUI
+check. v0.1.0-alpha tagged and released on GitHub earlier this session.

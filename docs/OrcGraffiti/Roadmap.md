@@ -465,7 +465,18 @@ Controls:
 - seam angle;
 - wrap angle;
 - height;
-- inside/outside filtering.
+- inside/outside filtering (min/max radius).
+
+**Status (2026-08-11):** implemented — `CylinderFrame`/`make_cylinder_frame`
+and `CylindricalProjectionSettings`/`project_cylindrical` in
+`src/libslic3r/ImagePaint/Projection.{hpp,cpp}`. `seam_angle` names the
+angle mapping to `u=0.5` (front reference direction), not the literal seam
+location — the seam itself sits at `seam_angle + pi` — per the standard
+cylindrical-UV convention; the raw formula's `theta` range `(-pi,pi]`
+otherwise has no natural `[0,1]` mapping. 9 tests in
+`tests/libslic3r/test_image_paint_projection.cpp`. **Not yet wired into
+`FaceSampler`/`ImagePaintPipeline`** — projection math only, matching this
+section's own task order (projection before sampling integration).
 
 ### Spherical Projection
 
@@ -474,6 +485,13 @@ direction = normalize(p-center)
 longitude = atan2(dot(direction,T), dot(direction,R))
 latitude = asin(dot(direction,A))
 ```
+
+**Status (2026-08-11):** implemented — `SphericalProjectionSettings`/
+`project_spherical`, reusing `CylinderFrame` (sphere centre/polar axis/
+equatorial reference) rather than a duplicate frame type. `v` maps
+directly from latitude (`v = 0.5 - latitude/PI`) with no separate height
+setting, since a sphere's latitude range is fixed. 8 tests. Same
+"not yet wired into the sampling pipeline" caveat as cylindrical above.
 
 ### Occlusion
 

@@ -123,6 +123,41 @@ add_executable(orcgraffiti orcgraffiti_cli/orcgraffiti.cpp)
 target_link_libraries(orcgraffiti libslic3r boost_headeronly libcurl OpenSSL::SSL OpenSSL::Crypto)
 target_compile_definitions(orcgraffiti PRIVATE -DBOOST_ALL_NO_LIB -DBOOST_USE_WINAPI_VERSION=0x602 -DBOOST_SYSTEM_USE_UTF8)
 
+if (BUILD_TESTS)
+    # CLI contract tests (Agent_Surface.md §12.1) — golden checks against the
+    # unit-cube fixture. Not a Catch2 suite: orcgraffiti is invoked as a
+    # subprocess and its stdout is matched with CTest's own regex checks.
+    set(ORCGRAFFITI_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/../tests/orcgraffiti_cli/fixtures")
+
+    add_test(NAME orcgraffiti_cli_version
+             COMMAND orcgraffiti version)
+    set_tests_properties(orcgraffiti_cli_version PROPERTIES
+        PASS_REGULAR_EXPRESSION "orcgraffiti [0-9.]+"
+        LABELS "OrcGraffiti;CLI")
+
+    add_test(NAME orcgraffiti_cli_info_fixture
+             COMMAND orcgraffiti info "${ORCGRAFFITI_FIXTURES}/unit_cube.stl")
+    set_tests_properties(orcgraffiti_cli_info_fixture PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"triangle_count\": 12"
+        LABELS "OrcGraffiti;CLI")
+
+    # Domain-error paths exit non-zero; PASS_REGULAR_EXPRESSION alone makes
+    # CTest judge pass/fail purely on stdout content, not the exit code.
+    add_test(NAME orcgraffiti_cli_info_missing_file
+             COMMAND orcgraffiti info "${ORCGRAFFITI_FIXTURES}/does_not_exist.stl")
+    set_tests_properties(orcgraffiti_cli_info_missing_file PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"code\": \"ModelLoadFailed\""
+        LABELS "OrcGraffiti;CLI")
+
+    add_test(NAME orcgraffiti_cli_paint_requires_dry_run_or_out
+             COMMAND orcgraffiti paint "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --image "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json")
+    set_tests_properties(orcgraffiti_cli_paint_requires_dry_run_or_out PROPERTIES
+        PASS_REGULAR_EXPRESSION "AS-3"
+        LABELS "OrcGraffiti;CLI")
+endif()
+
 # Create a slic3r executable
 # Process manifests for various platforms.
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/dev-utils/platform/msw/OrcaSlicer.rc.in ${CMAKE_CURRENT_BINARY_DIR}/OrcaSlicer.rc @ONLY)

@@ -23,10 +23,11 @@ feature/image-paint-phase1-types
 
 ## Working Build
 
-- ImagePaint unit tests: **86/86** (412 assertions; cylindrical + spherical projection, 17 new)
+- ImagePaint unit tests: **90/90** (444 assertions; cylindrical + spherical
+  projection + all 6 `--view` presets now golden-tested)
 - Full app: Release `orca-slicer.exe` builds
 - `orcgraffiti.exe`: `version`, `help`, `info`, `paint --dry-run` — links libslic3r only. **`paint --out` is disabled**, refuses with a clear error.
-- ctest: **23/23 green** (15 ImagePaint core + 8 orcgraffiti CLI contract tests)
+- ctest: **27/27 green** (19 ImagePaint core + 8 orcgraffiti CLI contract tests)
 - Sample image: `C:\Users\hardc\OneDrive\Pictures\garth.jpg`
 
 ## ⛔ AS-3 write path: DISABLED — two fix attempts each confirmed broken by real testing
@@ -107,11 +108,20 @@ a headless CLI has no equivalent for. There may be more such gaps.
 
 ## Next Three Tasks
 
-1. Phase 7: cylindrical and spherical projection math are landed and
-   tested (17 tests, `Projection.{hpp,cpp}`); next is wiring either into
-   `FaceSampler`/`ImagePaintPipeline` (bigger, touches tested surface), or
-   occlusion (same roadmap section, less specified — needs design work
-   before blind implementation).
+1. Wiring cylindrical/spherical projection into `FaceSampler`/
+   `ImagePaintPipeline` was scoped and deliberately deferred this session:
+   it requires changing `ImagePaintRequest::projection`'s type (currently
+   concrete `PlanarProjectionSettings`) to a variant, which breaks direct
+   field-access call sites in `GLGizmoImagePainter.cpp` (GUI, 4 lines),
+   `orcgraffiti.cpp`, and both pipeline/projection test files (~10+ call
+   sites total) — feasible (a full GUI DLL rebuild is available to verify
+   against, `OrcaSlicer.dll` already builds in this env) but is real,
+   bigger work deserving its own focused pass, not a tack-on. Also: with
+   no CLI flag or GUI control yet exposing curved projection selection,
+   wiring it in now has no reachable consumer — arguably premature until
+   occlusion (same roadmap section) is at least scoped, since the Phase 7
+   exit gate ("predictable images without painting hidden surfaces") needs
+   occlusion to mean anything for a cup/sphere fixture.
 2. AS-5 (MCP thin wrap) remains blocked behind AS-3 per Roadmap.md §20's
    own gate rule ("Do not implement AS-5 before AS-3") — and AS-3 is now
    explicitly disabled, not just unverified, so this is further blocked
@@ -132,7 +142,11 @@ FlashForge Studio outright). Both underlying bugs found (missing
 documented for any future attempt, but self-consistency checks proved
 insufficient twice — `--out` now refuses cleanly with an explanatory error
 rather than risk a third silent failure. Also landed Phase 7's cylindrical
-AND spherical projection math (17 new tests, 86/86 passing), not yet
-wired into the sampling pipeline. AS-4 (skill file) and the `LoadStrategy`
-fix (unaffected by the above, reading works fine) landed earlier this
-session; v0.1.0-alpha tagged and released on GitHub.
+AND spherical projection math (not yet wired into the sampling pipeline —
+deliberately deferred, see "Next Three Tasks"), plus golden tests locking
+in all 6 `--view` presets (previously only front/top were tested; back/
+left/right/bottom were "documented by inspection" per multiple prior
+devlogs). 90/90 ImagePaint test cases, 27/27 ctest. AS-4 (skill file) and
+the `LoadStrategy` fix (unaffected by the AS-3 issues above, reading works
+fine) landed earlier this session; v0.1.0-alpha tagged and released on
+GitHub.

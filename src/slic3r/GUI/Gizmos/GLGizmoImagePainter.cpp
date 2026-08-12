@@ -467,16 +467,18 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
     // subdivides paint resolution (TriangleSelector's own split tree, not the
     // mesh) so a colour patch isn't capped by the source mesh's triangle
     // density. Smaller = finer detail but more triangles to compute/apply —
-    // and, critically, more tool changes once actually sliced: the printer
-    // can't physically resolve color detail finer than roughly its nozzle
-    // diameter, so going below that just multiplies filament swaps (and
-    // print time) without adding anything visible. Floor the slider there.
-    float detail_min = 0.2f;
+    // and, critically, more tool changes once actually sliced. As a rule of
+    // thumb the printer can't usefully resolve color detail much finer than
+    // its nozzle diameter, but this is guidance, not an enforced floor: some
+    // setups (calibrated flow, non-default nozzles, techniques Orca's
+    // printer presets don't fully capture) can legitimately want finer than
+    // that, and it's not this control's job to second-guess them.
+    float nozzle_diameter_hint = 0.f;
     if (auto* preset_bundle = wxGetApp().preset_bundle) {
         const auto* nozzle_diameters =
             preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
         if (nozzle_diameters && nozzle_diameters->size() > 0)
-            detail_min = static_cast<float>(nozzle_diameters->get_at(0));
+            nozzle_diameter_hint = static_cast<float>(nozzle_diameters->get_at(0));
     }
 
     m_imgui->text(_L("Detail"));
@@ -484,17 +486,19 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
     ImGui::PushItemWidth(unit * 14.f);
     ImGui::SliderFloat("##detail", &m_detail_mm, 0.f, 2.f,
                        m_detail_mm <= 0.f ? "Off" : "%.2f mm");
-    if (ImGui::IsItemHovered())
-        m_imgui->tooltip(_L("Subdivides each painted face's paint resolution down to this "
-                            "edge length so color patches aren't capped by the mesh's own "
-                            "triangle density. 0 = off (one flat color per original triangle). "
-                            "Floored at the nozzle diameter — finer than that only adds tool "
-                            "changes and print time, not visible detail."),
-                         ImGui::GetFontSize() * 20.f);
+    if (ImGui::IsItemHovered()) {
+        wxString tip = _L("Subdivides each painted face's paint resolution down to this "
+                          "edge length so color patches aren't capped by the mesh's own "
+                          "triangle density. 0 = off (one flat color per original triangle). "
+                          "Finer detail means more tool changes and print time once sliced.");
+        if (nozzle_diameter_hint > 0.f)
+            tip += wxString::Format(_L(" Your printer's nozzle is %.2f mm — going much finer "
+                                       "than that usually adds print time without adding "
+                                       "visible detail, but it's not blocked."), nozzle_diameter_hint);
+        m_imgui->tooltip(tip, ImGui::GetFontSize() * 25.f);
+    }
     ImGui::PopItemWidth();
     m_detail_mm = std::max(0.f, std::min(m_detail_mm, 2.f));
-    if (m_detail_mm > 0.f && m_detail_mm < detail_min)
-        m_detail_mm = detail_min;
 
     ImGui::Separator();
 

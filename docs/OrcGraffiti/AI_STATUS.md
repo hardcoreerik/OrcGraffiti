@@ -469,6 +469,40 @@ ImagePaint+TriangleSelector+MeshBake cases, full `ALL_BUILD` clean.
 Stage 3 (the actual commit transaction into a live `ModelVolume`) is next
 and not yet started.
 
+## Detail floor reverted — was overreach
+
+User tested the previous fixes and reported: (a) results looked flat/
+untextured in several frames of a new recording, and (b) the "Advanced:
+camera-facing projection" legacy path showed inverted colors and poor
+detail. Explicit instruction: revert the nozzle-diameter hard floor on
+Detail — "there are things that users could do that would allow lower
+settings, that may not be apparent in orca printer presets/settings."
+Correct call: nozzle diameter is a reasonable *rule of thumb*, not a
+reliable ceiling on what a given real-world setup can actually resolve
+(calibrated flow, unusual nozzles, techniques the preset system doesn't
+capture), and it wasn't this control's place to enforce it. Reverted the
+hard clamp; the nozzle-diameter figure is now tooltip guidance only, never
+blocks the slider.
+
+Investigated whether the flat-block symptom was caused by the mirror
+toggle added alongside the (now-reverted) floor: read
+`apply_rotation_mirror()`'s implementation directly — `if (mirror_u) u =
+-u;` — confirmed mathematically inert when the Flip checkbox is
+unchecked (the default), so this is very unlikely to be a regression from
+that change. Most likely explanation not yet confirmed: the on-screen 3D
+viewport camera is independent of the chosen View preset button — the
+preset only changes the *projection* direction, not where the user is
+currently looking — so a screen recording can easily show the model from
+a face that wasn't the one just painted, which reads as "nothing
+happened" without being a bug. Possible real improvement flagged, not yet
+built: auto-orient the viewport camera to match the selected View preset
+on Apply, which would remove this whole class of confusion regardless of
+whether it's the actual cause here.
+
+The "Advanced camera-facing projection inverted colors" report is
+**not yet investigated** — that legacy path wasn't touched by any recent
+change; flagged as a real, separate report to chase next, not guessed at.
+
 ## Next Three Tasks
 
 1. Waiting on the user's live GUI test of the Image Paint gizmo (launched

@@ -3,8 +3,7 @@
 ## Current Phase
 
 Phase 6+ mapping quality green. **Agent Surface AS-1 through AS-4 implemented and tested.**
-Phase 7 (cylindrical/spherical projection) started: cylindrical projection
-math landed.
+Phase 7 (cylindrical/spherical projection) math complete for both projections.
 
 ## Current Branch
 
@@ -22,82 +21,90 @@ feature/image-paint-phase1-types
 
 ## Working Build
 
-- ImagePaint unit tests: **78/78** (388 assertions; incl. cylindrical projection, 9 new)
+- ImagePaint unit tests: **86/86** (412 assertions; cylindrical + spherical projection, 17 new)
 - Full app: Release `orca-slicer.exe` builds
 - `orcgraffiti.exe`: `version`, `help`, `info`, `paint --dry-run`, `paint --out` — links libslic3r only
 - ctest: **24/24 green** (15 ImagePaint core + 9 orcgraffiti CLI contract tests)
 - Sample image: `C:\Users\hardc\OneDrive\Pictures\garth.jpg`
 
-## Active Task
+## ⚠️ AS-3 write path: CRASH FOUND AND FIXED — re-verification needed before trusting again
 
-AS-3's BBS-native writer bug is **fixed** (root cause found via a real
-reference 3MF the user provided — see below). `paint --out` now writes via
-`store_bbs_3mf` and this CLI's own `info`/`paint --dry-run` correctly
-report `has_mmu_paint: true` on a file it just wrote — locked in as an
-automated ctest regression guard
-(`orcgraffiti_cli_paint_out_write` → `orcgraffiti_cli_paint_out_reload_has_paint`).
+`paint --out` produced a file that **crashed the user's OrcaSlicer 2.4.2
+and FlashForge Studio on open**, reported directly after they tested
+`gui_check_bbs_v2.3mf`. Root cause found and a fix has been built and
+tested by this CLI's own tooling — **but the fix has NOT yet been
+re-verified by a human opening a file in real slicer software.** Do not
+generate and hand off another `--out` file without explicit user
+permission — they already hit one crash from this feature.
 
-**A fresh test file (`gui_check_bbs_v2.3mf`) was generated and sent to the
-user for the actual GUI reopen check — this is still pending confirmation
-at time of writing.** Do not claim AS-3's real exit gate is met until that
-comes back positive.
+### The crash and its fix (2026-08-11)
 
-### AS-3 bug history (2026-08-11, this session — read before touching the writer again)
+`_BBS_3MF_Exporter::_add_relationships_file_to_archive` (`bbs_3mf.cpp:6750`)
+unconditionally writes `_rels/.rels` entries referencing
+`Metadata/plate_1.png` and `Metadata/plate_1_small.png` whenever no
+thumbnail path was set in its internal `PackingTemporaryData` — it does
+NOT skip the relationship when there's no file to back it. Since
+`orcgraffiti` never supplied `StoreParams::thumbnail_data`, the written
+archive had `Relationship` entries pointing at files that were never
+actually written into the zip — a dangling OPC package reference.
+Confirmed via direct zip inspection (Python `zipfile`): the crashing
+file's `namelist()` had no `plate_1*.png` despite `_rels/.rels`
+referencing them by exact path.
 
-1. **Fixed — `LoadStrategy` bug, pre-existing since AS-1, affects ANY
-   `.3mf` input:** `Model::read_from_file`'s default `LoadStrategy`
-   (`AddDefaultInstances` alone) omits `LoadModel`/`LoadConfig`, so the BBS
-   3MF importer silently returns zero objects for `.3mf` inputs. Fixed via
-   `full_load_strategy()` in `orcgraffiti.cpp`. Locked in by
-   `orcgraffiti_cli_info_3mf_fixture`.
-2. **First BBS-writer attempt (loop 3): reverted.** Empty `PlateDataPtrs`
-   for non-3MF inputs wrote no `<plate>` element at all → reload saw zero
-   objects. Fixed by synthesizing a single default `PlateData` when empty.
-   After that fix, reload *still* failed differently:
-   `"can not find object from plate's obj_map, id=2, skip this object"`
-   from `_BBS_3MF_Importer::_load_model_from_file` (`bbs_3mf.cpp:2363`) —
-   root cause not isolated at the time. Reverted rather than ship broken.
-3. **Scope narrowed to plain `store_3mf` (v1), per user decision** after
-   option 2's dead end. Verified geometry/fingerprint round-trip — but
-   **the user's actual GUI check on this file failed**: "just a cube",
-   Orca mislabeled the file's origin as Bambu Studio. Confirmed the plain
-   writer does not satisfy AS-3's real exit gate, not just the CLI's own
-   already-known-broken self-check.
-4. **User provided a real reference 3MF** (a single-object project saved
-   by this fork's own GUI, `D:\3D models\prostike arrow\sample.3mf` — not
-   committed to the repo, personal file, used only for local diffing).
-   Diffing it against the loop-3 BBS attempt's output found the actual
-   root cause: `bbs_3mf.cpp`'s exporter only writes an `<assemble_item>`
-   for instances with `ModelInstance::is_assemble_initialized() == true`
-   (`bbs_3mf.cpp:8186`). A freshly-loaded model's instances never have this
-   set, so the exporter silently wrote an empty `<assemble></assemble>` —
-   which the reference file's populated `<assemble_item>` did NOT have.
-5. **Fixed and verified.** `cmd_paint`'s write path now: (a) synthesizes a
-   default plate when `plate_data` is empty (loop-3 fix, kept), (b) calls
-   `instance->set_assemble_transformation(instance->get_transformation())`
-   on every instance before writing (this loop's fix), (c) uses
-   `SaveStrategy::Zip64 | SaveStrategy::UseLoadedId` (matching
-   `OrcaSlicer.cpp`'s own `export_project`). `paint --out` → `info` on the
-   same file now reports `has_mmu_paint: true`. Fingerprint/geometry still
-   round-trip exactly.
+**Fix:** populate `StoreParams::thumbnail_data` with a minimal valid
+16×16 white `ThumbnailData` before calling `store_bbs_3mf`.
+`_add_thumbnail_file_to_archive` (miniz-based PNG encoder, no wx/GUI
+dependency) then actually writes `Metadata/plate_1.png` and an
+auto-generated `_small.png` companion, so every relationship target
+exists. Re-inspected the written zip after the fix: both PNGs present
+with valid signatures (87 and 143 bytes respectively), all 4 relationship
+entries resolve to real files. `has_mmu_paint` round-trip and 24/24 ctest
+still pass.
 
-**Still unverified:** only tested against a single-object,
-single-instance, single-volume model (`unit_cube.stl`). Multi-object,
-multi-instance, or multi-plate inputs are unexplored — the assemble-init
-loop handles them mechanically (iterates all objects/instances) but has
-had zero real testing against such a case.
+**What this fix does NOT prove:** that the file no longer crashes real
+slicer software. This CLI's own reader/writer pair agreeing with each
+other was also true of the *previous, crashing* version — self-consistency
+is not the same as external validity. The next step is asking the user if
+they're willing to test again, not assuming this is resolved.
+
+### AS-3 bug history (2026-08-11, full chronology — read before touching the writer again)
+
+1. **Fixed — `LoadStrategy` bug**, pre-existing since AS-1, affects any
+   `.3mf` input: default `LoadStrategy` omits `LoadModel`/`LoadConfig`.
+   Fixed via `full_load_strategy()`.
+2. **First BBS-writer attempt: reverted.** Empty `<plate>` element for
+   non-3MF inputs → reload saw zero objects. Fixed by synthesizing a
+   default `PlateData`. Reload then failed differently (`obj_map` lookup)
+   — root cause not isolated at the time; reverted.
+3. **Scope narrowed to plain `store_3mf` (v1).** Verified geometry/
+   fingerprint round-trip, but the user's GUI check failed: "just a cube,"
+   mislabeled as Bambu Studio.
+4. **User provided a real reference 3MF** to diff against (a personal
+   file, not committed to the repo). Found the actual root cause: the
+   exporter only writes `<assemble_item>` for instances with an
+   initialized assemble transform.
+5. **Fixed and self-verified** — `has_mmu_paint: true` round-trip. Sent
+   `gui_check_bbs_v2.3mf` to the user.
+6. **User's GUI check: CRASH** in both OrcaSlicer 2.4.2 and FlashForge
+   Studio. Immediately reverted the "this is fixed" framing and
+   investigated rather than sending a third blind attempt.
+7. **Found and fixed the dangling-thumbnail-relationship bug** (this
+   entry) — see above. **Not yet re-verified by a human.**
+
+**Still unverified beyond the crash-fix status above:** only tested
+against a single-object, single-instance, single-volume model
+(`unit_cube.stl`). Multi-object/instance/plate inputs are unexplored.
 
 ## Next Three Tasks
 
-1. Get the user's GUI confirmation on `gui_check_bbs_v2.3mf` (already
-   sent) — this is AS-3's actual exit gate. If it fails, do NOT attempt
-   another blind fix — ask for a fresh reference file/diff, as this
-   session's breakthrough only came from a real comparison, not guessing.
-2. If confirmed: consider AS-5 (MCP thin wrap), now legitimately unblocked
-   rather than nominally-gated-past.
-3. Otherwise: continue Phase 7 (cylindrical projection math landed this
-   session — next: wire it into `FaceSampler`/`ImagePaintPipeline`, or move
-   to spherical projection / occlusion per `Roadmap.md` §11).
+1. **Ask the user if they're willing to test the crash fix** — do not
+   generate and hand off a file without that explicit go-ahead. If they
+   decline, leave AS-3 documented as "self-consistent but not
+   human-verified" rather than claiming it works.
+2. If confirmed working: AS-3 is genuinely done; consider AS-5.
+3. Otherwise: continue Phase 7 — both cylindrical and spherical projection
+   math are landed and tested; next is wiring either into
+   `FaceSampler`/`ImagePaintPipeline`, or occlusion (same roadmap section).
 
 ## Open PRs
 
@@ -105,11 +112,13 @@ https://github.com/hardcoreerik/OrcGraffiti/pull/1
 
 ## Updated
 
-2026-08-11 — AS-3's BBS 3MF writer bug found and fixed (missing
-`<assemble_item>` — root cause via a real reference 3MF the user provided
-after their GUI check caught the plain-writer approach failing). Own
-CLI self-check now passes; human GUI confirmation on a fresh file still
-pending. Also landed Phase 7's first task: cylindrical projection math
-(`project_cylindrical`/`make_cylinder_frame`), 9 new tests, not yet wired
-into the sampling pipeline. AS-4 (skill file) and the `LoadStrategy` fix
-landed earlier this session; v0.1.0-alpha tagged and released on GitHub.
+2026-08-11 — **AS-3 crash found and fixed**: a file `paint --out` wrote
+crashed the user's OrcaSlicer 2.4.2 and FlashForge Studio (dangling 3MF
+package relationships referencing thumbnail files that were never
+written). Fixed by supplying a minimal placeholder thumbnail so every
+relationship target exists. Human re-verification still needed before
+trusting this — see the warning banner above. Also landed Phase 7's
+cylindrical AND spherical projection math (17 new tests, 86/86 passing),
+not yet wired into the sampling pipeline. AS-4 (skill file) and the
+`LoadStrategy` fix landed earlier this session; v0.1.0-alpha tagged and
+released on GitHub.

@@ -11,7 +11,9 @@
 #include "libslic3r/Model.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/TriangleSelector.hpp"
-#include "libslic3r/Format/3mf.hpp"
+#include "libslic3r/Format/bbs_3mf.hpp"
+
+#include <set>
 #include "libslic3r_version.h"
 #include "libslic3r/ImagePaint/TopologyFingerprint.hpp"
 #include "libslic3r/ImagePaint/ImagePaintPipeline.hpp"
@@ -58,18 +60,16 @@ void print_help()
         "  --quality <q>        fast|threepoint|gaussian7 (default gaussian7)\n"
         "  --merge <policy>     overwrite|preserve (default overwrite)\n"
         "  --dry-run            Run pipeline, write report only, no 3MF write\n"
-        "  --out <path.3mf>     Write mode: apply the plan and save a plain 3MF (see note)\n"
+        "  --out <path.3mf>     Write mode: apply the plan and save a BBS-native 3MF\n"
         "  --force              Allow overwriting an existing --out path\n"
         "  --allow-in-place     Allow --out to equal the input path (default: refused)\n"
         "\n"
         "Exactly one of --dry-run or --out is required for paint.\n"
         "\n"
-        "NOTE: --out writes a plain (non-BBS) 3MF via Slic3r::store_3mf — printer/\n"
-        "filament/plate/profile settings from a BBS/Orca project input are NOT\n"
-        "carried into the output (AS-3 v1 scope). This CLI's own 'info'/'paint\n"
-        "--dry-run' cannot currently detect paint on a .3mf produced by --out\n"
-        "(reader-format mismatch — see AI_STATUS.md); a manual GUI reopen check is\n"
-        "the only current way to confirm --out worked. See Agent_Surface.md.\n"
+        "NOTE: --out writes via Slic3r::store_bbs_3mf, this fork's native format.\n"
+        "GUI reopen has not been exhaustively verified across all input shapes yet —\n"
+        "a manual GUI check is still recommended for anything beyond a simple single-\n"
+        "object model. See AI_STATUS.md's AS-3 notes and Agent_Surface.md.\n"
         "\n"
         "See docs/OrcGraffiti/Agent_Surface.md for the full CLI contract.\n";
 }
@@ -398,8 +398,19 @@ int cmd_paint(const PaintOptions& opt)
     }
 
     Model model;
+    DynamicPrintConfig config;
+    ConfigSubstitutionContext config_substitutions(ForwardCompatibilitySubstitutionRule::Enable);
+    PlateDataPtrs plate_data;
+    std::vector<Preset*> project_presets;
     try {
-        model = load_model_for_cli(opt.input_path);
+        if (opt.dry_run) {
+            model = load_model_for_cli(opt.input_path);
+        } else {
+            // Write mode needs config/plate/preset context to write via
+            // store_bbs_3mf (BBS-native writer — see AI_STATUS.md AS-3 notes).
+            model = Model::read_from_file(opt.input_path, &config, &config_substitutions,
+                                           full_load_strategy(), &plate_data, &project_presets);
+        }
     } catch (const std::exception& ex) {
         report["ok"] = false;
         report["error"] = { {"code", "ModelLoadFailed"}, {"message", ex.what()} };
@@ -527,26 +538,51 @@ int cmd_paint(const PaintOptions& opt)
     }
     vol->mmu_segmentation_facets.set(selector);
 
-    // AS-3 v1 scope: plain (non-BBS) 3MF via store_3mf. This opens in any
-    // 3MF-compliant tool but does not carry printer/filament/plate/profile
-    // settings from a BBS/Orca project input — see Agent_Surface.md and
-    // AI_STATUS.md's AS-3 investigation notes for why the BBS writer
-    // (store_bbs_3mf) isn't used here yet.
-    const bool stored = store_3mf(opt.out_path.c_str(), &model, nullptr,
-                                   /*fullpath_sources=*/false);
+    // Non-3MF inputs (STL/OBJ) carry no BBS plate structure — synthesize a
+    // single default plate covering every object/instance so load_bbs_3mf
+    // has a <plate> to read on reopen (see AI_STATUS.md AS-3 notes, "Bug A").
+    if (plate_data.empty()) {
+        std::set<std::pair<int, int>> obj_inst;
+        for (int oi = 0; oi < static_cast<int>(model.objects.size()); ++oi)
+            for (int ii = 0; ii < static_cast<int>(model.objects[oi]->instances.size()); ++ii)
+                obj_inst.insert({oi, ii});
+        plate_data.push_back(new PlateData(0, obj_inst, /*lock_state=*/false));
+    }
+
+    // The exporter only writes an <assemble_item> for instances with an
+    // initialized assemble transform (bbs_3mf.cpp:8186) — without it, a
+    // reference file saved by this fork's own GUI shows the assemble block
+    // populated but ours didn't. Initialize it from the instance's own
+    // transformation so a freshly-loaded model matches that shape.
+    for (ModelObject* o : model.objects)
+        for (ModelInstance* inst : o->instances)
+            if (!inst->is_assemble_initialized())
+                inst->set_assemble_transformation(inst->get_transformation());
+
+    StoreParams store_params;
+    store_params.path            = opt.out_path;
+    store_params.model           = &model;
+    store_params.plate_data_list = plate_data;
+    store_params.project_presets = project_presets;
+    store_params.config          = &config;
+    store_params.strategy        = SaveStrategy::Zip64 | SaveStrategy::UseLoadedId;
+
+    const bool stored = store_bbs_3mf(store_params);
+    release_PlateData_list(plate_data);
+
     if (!stored) {
         report["ok"] = false;
-        report["error"] = { {"code", "ApplyFailed"}, {"message", "store_3mf failed to write " + opt.out_path} };
+        report["error"] = { {"code", "ApplyFailed"}, {"message", "store_bbs_3mf failed to write " + opt.out_path} };
         std::cerr << "orcgraffiti: failed to write '" << opt.out_path << "'\n";
         return write_report_and_exit(report, opt.report_path, 3); // I/O error
     }
 
     report["ok"]     = true;
     report["output"] = opt.out_path;
-    report["output_format"] = "plain-3mf";
+    report["output_format"] = "bbs-3mf";
     report["error"]  = nullptr;
     std::cerr << "orcgraffiti: wrote " << opt.out_path
-               << " (plain 3MF — printer/filament/plate settings not carried through, see --help)\n";
+               << " — manual GUI reopen check recommended (AS-3 exit gate)\n";
 
     return write_report_and_exit(report, opt.report_path, 0);
 }

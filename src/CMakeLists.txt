@@ -176,6 +176,41 @@ if (BUILD_TESTS)
     set_tests_properties(orcgraffiti_cli_paint_both_dry_run_and_out_rejected PROPERTIES
         PASS_REGULAR_EXPRESSION "mutually exclusive"
         LABELS "OrcGraffiti;CLI")
+
+    # Real dry-run using the committed tiny PNG fixture (pattern.png, 4x4 —
+    # generated in Python, not from any external/user image) rather than a
+    # nonsense --image path, so this actually exercises the decode+sample
+    # pipeline instead of just the flag-validation paths above.
+    add_test(NAME orcgraffiti_cli_paint_dry_run_fixture
+             COMMAND orcgraffiti paint "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --image "${ORCGRAFFITI_FIXTURES}/pattern.png"
+                     --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json"
+                     --view front --dry-run)
+    set_tests_properties(orcgraffiti_cli_paint_dry_run_fixture PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"ok\": true"
+        LABELS "OrcGraffiti;CLI")
+
+    # Write + reload round trip — regression guard for the AS-3 BBS-writer
+    # bugs found this session (empty <plate> for non-3MF inputs; missing
+    # <assemble_item> for instances without an initialized assemble
+    # transform). FIXTURES_SETUP/FIXTURES_REQUIRED chains write before read.
+    set(ORCGRAFFITI_PAINT_OUT "${CMAKE_CURRENT_BINARY_DIR}/orcgraffiti_ctest_painted.3mf")
+    add_test(NAME orcgraffiti_cli_paint_out_write
+             COMMAND orcgraffiti paint "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --image "${ORCGRAFFITI_FIXTURES}/pattern.png"
+                     --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json"
+                     --view front --out "${ORCGRAFFITI_PAINT_OUT}" --force)
+    set_tests_properties(orcgraffiti_cli_paint_out_write PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"ok\": true"
+        FIXTURES_SETUP OrcgraffitiPaintedFile
+        LABELS "OrcGraffiti;CLI")
+
+    add_test(NAME orcgraffiti_cli_paint_out_reload_has_paint
+             COMMAND orcgraffiti info "${ORCGRAFFITI_PAINT_OUT}")
+    set_tests_properties(orcgraffiti_cli_paint_out_reload_has_paint PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"has_mmu_paint\": true"
+        FIXTURES_REQUIRED OrcgraffitiPaintedFile
+        LABELS "OrcGraffiti;CLI")
 endif()
 
 # Create a slic3r executable

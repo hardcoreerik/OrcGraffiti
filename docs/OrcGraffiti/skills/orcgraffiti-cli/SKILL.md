@@ -5,7 +5,7 @@ description: >
   multicolor MMU faces onto it, and write a paintable 3MF — no GUI. Use when the
   user asks an agent to paint an image onto a mesh, batch process models, or drive
   OrcGraffiti's Image Paint without opening OrcaSlicer.
-status: AS-1/AS-2/AS-3 (v1 scope) implemented and tested — see "Implementation status" below
+status: AS-1/AS-2/AS-3 implemented and tested (native BBS 3MF writer) — see "Implementation status" below
 spec: docs/OrcGraffiti/Agent_Surface.md
 ---
 
@@ -28,11 +28,10 @@ spec: docs/OrcGraffiti/Agent_Surface.md
 ## When not to use
 
 - Interactive placement polish (use the GUI Image Paint gizmo)
-- Preserving a BBS/Orca project's printer/filament/plate profile through
-  paint — `--out` writes a **plain** 3MF (see "Known limitations" below);
-  profile data is not preserved
-- Confirming paint is visible without a human — this CLI's own self-check
-  cannot currently verify it (see "Known limitations")
+- Confirming paint is visible without a human — even though this CLI's own
+  self-check now passes (`has_mmu_paint: true` after a `paint --out` +
+  `info` round trip), an actual GUI reopen has not been exhaustively
+  verified across every input shape — see "Known limitations"
 - Clicking the Orca GUI / screenshots / RPA
 - Topology-changing remesh paint (not in MVP)
 
@@ -46,9 +45,9 @@ spec: docs/OrcGraffiti/Agent_Surface.md
    (otherwise the report prints to stdout, mixed with any stderr progress).
 4. Treat report JSON as source of truth; stderr is for humans.
 5. `paint` does **not** mutate printer/process/filament profile files
-   (INV-008) — and with the current `store_3mf`-based `--out` writer, it
-   also doesn't *preserve* a BBS/Orca project's profile settings. If the
-   input was a real Orca project 3MF, the output loses that context.
+   (INV-008) — the CLI passes a real 3MF project's loaded config/plate/
+   preset data straight through to the writer unchanged, rather than
+   dropping or editing it.
 6. Selection: run `info` first if the project has multiple volumes; pass
    `--object`/`--volume` to `paint` to disambiguate.
 
@@ -123,12 +122,13 @@ orcgraffiti paint model.stl \
 
 Add `--force` to overwrite an existing `--out` path.
 
-**There is currently no automated way to confirm the write worked beyond
-`ok: true` in the report.** `orcgraffiti info model_painted.3mf` will
-report `has_mmu_paint: false` even on a successfully painted file — this is
-a known reader-format gap (see below), not evidence the paint is missing.
-If you need certainty, ask the user to open the file in Orca's GUI and
-check the Image Paint gizmo / MMU face colors.
+`orcgraffiti info model_painted.3mf` now correctly reports
+`has_mmu_paint: true` after a `paint --out` write (fixed 2026-08-11 — see
+"Known limitations"). That confirms the paint attribute round-trips
+through this CLI's own reader/writer pair; it is **not** the same as a GUI
+reopen check. Ask the user to open the file in Orca and check the Image
+Paint gizmo / MMU face colors for real confirmation, especially for
+anything beyond a simple single-object model.
 
 ## Important flags (paint)
 
@@ -149,20 +149,20 @@ check the Image Paint gizmo / MMU face colors.
 
 ## Known limitations (read before assuming something is broken)
 
-1. **`--out` writes a plain (non-BBS) 3MF**, via `Slic3r::store_3mf`, not
-   this fork's native `store_bbs_3mf`. A BBS/Orca project's
-   printer/filament/plate settings are **not** carried into the output.
-   This was a deliberate scope decision after the BBS writer proved to have
-   an unresolved 3MF-round-trip bug — see `AI_STATUS.md`'s AS-3 notes if
-   revisiting this.
-2. **This CLI cannot verify its own `--out` writes show paint.** `info` and
-   `paint --dry-run` always read `.3mf` through the BBS-format reader
-   (`load_bbs_3mf`), which only recognizes the BBS `paint_color` triangle
-   attribute — not the `slic3rpe:mmu_segmentation` attribute `store_3mf`
-   writes. `has_mmu_paint` will read back `false` on a file this same CLI
-   just painted. Mesh geometry and the topology fingerprint DO round-trip
-   correctly (verified) — it's specifically the paint-attribute check that
-   can't see across the format mismatch.
+1. **`--out` writes via `Slic3r::store_bbs_3mf`**, this fork's native
+   format — not the plain/generic 3MF writer. Two earlier attempts at this
+   failed round-trip (see `AI_STATUS.md`'s AS-3 notes for the full history):
+   first an empty `<plate>` element for non-3MF inputs, then a missing
+   `<assemble_item>` entry (the exporter only writes one for instances with
+   an initialized assemble transform — fixed by initializing it from the
+   instance's own transformation before writing). Both are now handled.
+2. This CLI's own `info`/`paint --dry-run` correctly report
+   `has_mmu_paint: true` on a file `--out` just wrote (fixed alongside the
+   writer bug above, since reader and writer now agree on the `paint_color`
+   attribute). This is real evidence the write worked structurally, but is
+   still not the same as a human confirming the GUI shows the paint —
+   **only tested against a single-object, single-instance, single-volume
+   model so far.** Multi-object or multi-plate inputs are unverified.
 3. Mesh geometry/topology round-trips exactly through `--out` — verified by
    comparing `info`'s reported `fingerprint` before and after a
    `paint --out` cycle on the same volume.

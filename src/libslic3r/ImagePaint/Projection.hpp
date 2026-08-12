@@ -9,6 +9,7 @@
 #include "ImagePaintCompat.hpp"
 #include <optional>
 #include <limits>
+#include <variant>
 
 namespace Slic3r::ImagePaint {
 
@@ -146,6 +147,15 @@ struct CylindricalProjectionSettings {
 
     bool mirror_u = false;
     bool mirror_v = false;
+
+    // Same sampling-control fields as PlanarProjectionSettings — see there
+    // for meaning. Front-facing here means the face normal points radially
+    // outward from the cylinder axis (see outward_direction()), not toward
+    // a fixed camera direction.
+    double alpha_threshold             = 0.05;
+    double minimum_coverage            = 0.5;
+    double front_face_cosine_threshold = 0.0;
+    bool   paint_through               = false;
 };
 
 // Build a right-handed orthonormal CylinderFrame from a cylinder axis and a
@@ -189,6 +199,14 @@ struct SphericalProjectionSettings {
 
     bool mirror_u = false;
     bool mirror_v = false;
+
+    // Same sampling-control fields as PlanarProjectionSettings — see there
+    // for meaning. Front-facing here means the face normal points radially
+    // outward from the sphere centre (see outward_direction()).
+    double alpha_threshold             = 0.05;
+    double minimum_coverage            = 0.5;
+    double front_face_cosine_threshold = 0.0;
+    bool   paint_through               = false;
 };
 
 // Project a single point from the coordinate space of the frame.
@@ -199,5 +217,33 @@ struct SphericalProjectionSettings {
 // returns inside=false.
 ProjectedPoint project_spherical(const Vec3d&                        p,
                                   const SphericalProjectionSettings& s);
+
+// ---------------------------------------------------------------------------
+// Generic dispatch — lets FaceSampler/ImagePaintPipeline operate on whichever
+// projection type is active without a switch at every call site.
+// ---------------------------------------------------------------------------
+
+using ProjectionSettings = std::variant<PlanarProjectionSettings,
+                                         CylindricalProjectionSettings,
+                                         SphericalProjectionSettings>;
+
+// Project a point using whichever projection type is active in s.
+ProjectedPoint project(const Vec3d& p, const ProjectionSettings& s);
+
+// Sampling-control accessors, uniform across projection types (each type
+// carries its own copy of these fields — see PlanarProjectionSettings for
+// what each one means).
+double alpha_threshold(const ProjectionSettings& s);
+double minimum_coverage(const ProjectionSettings& s);
+double front_face_cosine_threshold(const ProjectionSettings& s);
+bool   paint_through(const ProjectionSettings& s);
+
+// The direction a front-facing triangle at point p must point toward.
+// Planar: the fixed camera direction (-frame.normal), independent of p.
+// Cylindrical: the local radial-outward direction from the cylinder axis at p.
+// Spherical: the local radial-outward direction from the sphere centre at p.
+// Degenerate cases (p on the cylinder axis / at the sphere centre) fall back
+// to the frame's radial_basis direction rather than producing a NaN.
+Vec3d outward_direction(const Vec3d& p, const ProjectionSettings& s);
 
 } // namespace Slic3r::ImagePaint

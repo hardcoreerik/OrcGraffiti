@@ -506,19 +506,20 @@ int cmd_paint(const PaintOptions& opt)
                              {"message", fitted.error().user_message} };
         return write_report_and_exit(report, opt.report_path, 2);
     }
-    req.projection = *fitted;
-    req.projection.front_face_cosine_threshold = 0.05;
-    req.projection.minimum_coverage            = 0.25;
+    fitted->front_face_cosine_threshold = 0.05;
+    fitted->minimum_coverage            = 0.25;
+    const auto planar = *fitted;
+    req.projection = planar;
 
     report["projection"] = {
         {"space", "mesh-local"},
         {"auto_fit", true},
         {"look", {preset->first.x(), preset->first.y(), preset->first.z()}},
         {"up",   {preset->second.x(), preset->second.y(), preset->second.z()}},
-        {"width_mm", req.projection.width_mm},
-        {"height_mm", req.projection.height_mm},
-        {"front_face_cosine_threshold", req.projection.front_face_cosine_threshold},
-        {"minimum_coverage", req.projection.minimum_coverage}
+        {"width_mm", planar.width_mm},
+        {"height_mm", planar.height_mm},
+        {"front_face_cosine_threshold", planar.front_face_cosine_threshold},
+        {"minimum_coverage", planar.minimum_coverage}
     };
     report["fingerprint"] = fingerprint_json(its);
 

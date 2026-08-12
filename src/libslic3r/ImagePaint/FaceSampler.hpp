@@ -39,7 +39,7 @@ sample_faces(
     Span<const Vec3f>    vertices,
     Span<const Vec3i32>  indices,
     const DecodedImage&        image,
-    const PlanarProjectionSettings& proj,
+    const ProjectionSettings&  proj,
     SamplingQuality            quality,
     std::size_t                face_begin,
     std::size_t                face_end,

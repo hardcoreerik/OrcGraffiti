@@ -23,10 +23,10 @@ Vec3d triangle_normal(const Vec3f& a, const Vec3f& b, const Vec3f& c)
 // Returns {linear_rgb, alpha} or {black, 0} if out of bounds.
 std::pair<ColorRgbf, float>
 sample_point(const Vec3d& p,
-             const PlanarProjectionSettings& proj,
+             const ProjectionSettings& proj,
              const DecodedImage& image)
 {
-    const auto pp = project_planar(p, proj);
+    const auto pp = project(p, proj);
     const ColorRgba8 px = sample_bilinear(image, pp.u, pp.v);
     const float a = px.a / 255.f;
     ColorRgbf linear{
@@ -43,24 +43,26 @@ FaceSample sample_one_face(
     const Vec3f&                      vb,
     const Vec3f&                      vc,
     const DecodedImage&               image,
-    const PlanarProjectionSettings&   proj,
+    const ProjectionSettings&         proj,
     SamplingQuality                   quality)
 {
     FaceSample result;
     result.face_index = face_idx;
 
-    // Front-facing test using the projector normal.
-    const Vec3d n = triangle_normal(va, vb, vc);
-    const double dot = n.dot(-proj.frame.normal);
-    result.front_facing = dot >= proj.front_face_cosine_threshold * n.norm();
+    // centroid used for both the front-facing test (curved projections need
+    // the LOCAL outward direction at the face, not a single fixed camera
+    // direction) and for depth.
+    const Vec3d centroid = ((va + vb + vc).cast<double>()) / 3.0;
 
-    if (!proj.paint_through && !result.front_facing)
+    // Front-facing test using the projector's outward direction at centroid.
+    const Vec3d n = triangle_normal(va, vb, vc);
+    const double dot = n.dot(outward_direction(centroid, proj));
+    result.front_facing = dot >= front_face_cosine_threshold(proj) * n.norm();
+
+    if (!paint_through(proj) && !result.front_facing)
         return result;
 
-    // Build sample points from barycentric coordinates.
-    // centroid used for depth
-    const Vec3d centroid = ((va + vb + vc).cast<double>()) / 3.0;
-    const auto  cp = project_planar(centroid, proj);
+    const auto cp = project(centroid, proj);
     result.average_depth = static_cast<float>(cp.depth);
 
     switch (quality) {
@@ -82,7 +84,7 @@ FaceSample sample_one_face(
         for (const auto& vx : {va, vb, vc}) {
             const Vec3d pd = vx.cast<double>();
             auto [lin, a] = sample_point(pd, proj, image);
-            const auto pp2 = project_planar(pd, proj);
+            const auto pp2 = project(pd, proj);
             if (pp2.inside) {
                 any_inside = true;
                 sum_w_a += w * a;
@@ -97,7 +99,7 @@ FaceSample sample_one_face(
         if (sum_w_a > 0.f) {
             result.linear_rgb = {acc.r / sum_w_a, acc.g / sum_w_a, acc.b / sum_w_a};
         }
-        result.inside = any_inside && result.alpha > proj.alpha_threshold;
+        result.inside = any_inside && result.alpha > alpha_threshold(proj);
         break;
     }
     case SamplingQuality::Gaussian7: {
@@ -115,7 +117,7 @@ FaceSample sample_one_face(
             const float  w = GaussianSampler7::kWeight[i];
 
             const Vec3d sample_pt = b[0]*da + b[1]*db + b[2]*dc;
-            const auto pp2 = project_planar(sample_pt, proj);
+            const auto pp2 = project(sample_pt, proj);
 
             if (pp2.inside) {
                 points_inside += w;
@@ -133,7 +135,7 @@ FaceSample sample_one_face(
         if (sum_w_a > 0.f) {
             result.linear_rgb = {acc.r / sum_w_a, acc.g / sum_w_a, acc.b / sum_w_a};
         }
-        result.inside = any_inside && result.alpha >= static_cast<float>(proj.alpha_threshold);
+        result.inside = any_inside && result.alpha >= static_cast<float>(alpha_threshold(proj));
         break;
     }
     }
@@ -204,7 +206,7 @@ sample_faces(
     Span<const Vec3f>    vertices,
     Span<const Vec3i32>  indices,
     const DecodedImage&        image,
-    const PlanarProjectionSettings& proj,
+    const ProjectionSettings&  proj,
     SamplingQuality            quality,
     std::size_t                face_begin,
     std::size_t                face_end,

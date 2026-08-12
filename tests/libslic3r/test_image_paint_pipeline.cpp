@@ -281,9 +281,9 @@ TEST_CASE("run_image_paint real file with fit paints front of plate", "[ImagePai
         692.0 / 994.0,  // garth aspect
         1.02);
     REQUIRE(fitted.has_value());
+    fitted->front_face_cosine_threshold = 0.05;
+    fitted->minimum_coverage = 0.25;
     req.projection = *fitted;
-    req.projection.front_face_cosine_threshold = 0.05;
-    req.projection.minimum_coverage = 0.25;
 
     const auto result = run_image_paint(req);
     if (!result.has_value()) {
@@ -310,9 +310,9 @@ TEST_CASE("run_image_paint fit_planar_projection front view paints front faces",
         /*aspect=*/1.0,
         /*margin=*/1.02);
     REQUIRE(fitted.has_value());
+    fitted->front_face_cosine_threshold = 0.05;
+    fitted->minimum_coverage = 0.25;
     req.projection = *fitted;
-    req.projection.front_face_cosine_threshold = 0.05;
-    req.projection.minimum_coverage = 0.25;
 
     const auto image = make_solid_image(32, 32, 0, 255, 0);  // solid green
     const auto result = run_image_paint(req, image);
@@ -344,9 +344,9 @@ TEST_CASE("run_image_paint fit_planar_projection back view paints back faces", "
         Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
         Vec3d(0, -1, 0), Vec3d(0, 0, 1), /*aspect=*/1.0, /*margin=*/1.02);
     REQUIRE(fitted.has_value());
+    fitted->front_face_cosine_threshold = 0.05;
+    fitted->minimum_coverage = 0.25;
     req.projection = *fitted;
-    req.projection.front_face_cosine_threshold = 0.05;
-    req.projection.minimum_coverage = 0.25;
 
     const auto image = make_solid_image(32, 32, 0, 255, 0);
     const auto result = run_image_paint(req, image);
@@ -369,9 +369,9 @@ TEST_CASE("run_image_paint fit_planar_projection left view paints left faces", "
         Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
         Vec3d(1, 0, 0), Vec3d(0, 0, 1), /*aspect=*/1.0, /*margin=*/1.02);
     REQUIRE(fitted.has_value());
+    fitted->front_face_cosine_threshold = 0.05;
+    fitted->minimum_coverage = 0.25;
     req.projection = *fitted;
-    req.projection.front_face_cosine_threshold = 0.05;
-    req.projection.minimum_coverage = 0.25;
 
     const auto image = make_solid_image(32, 32, 0, 255, 0);
     const auto result = run_image_paint(req, image);
@@ -394,9 +394,9 @@ TEST_CASE("run_image_paint fit_planar_projection right view paints right faces",
         Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
         Vec3d(-1, 0, 0), Vec3d(0, 0, 1), /*aspect=*/1.0, /*margin=*/1.02);
     REQUIRE(fitted.has_value());
+    fitted->front_face_cosine_threshold = 0.05;
+    fitted->minimum_coverage = 0.25;
     req.projection = *fitted;
-    req.projection.front_face_cosine_threshold = 0.05;
-    req.projection.minimum_coverage = 0.25;
 
     const auto image = make_solid_image(32, 32, 0, 255, 0);
     const auto result = run_image_paint(req, image);
@@ -419,9 +419,9 @@ TEST_CASE("run_image_paint fit_planar_projection bottom view paints bottom faces
         Span<const Vec3f>(req.vertices.data(), req.vertices.size()),
         Vec3d(0, 0, 1), Vec3d(0, 1, 0), /*aspect=*/1.0, /*margin=*/1.02);
     REQUIRE(fitted.has_value());
+    fitted->front_face_cosine_threshold = 0.05;
+    fitted->minimum_coverage = 0.25;
     req.projection = *fitted;
-    req.projection.front_face_cosine_threshold = 0.05;
-    req.projection.minimum_coverage = 0.25;
 
     const auto image = make_solid_image(32, 32, 0, 255, 0);
     const auto result = run_image_paint(req, image);
@@ -434,6 +434,132 @@ TEST_CASE("run_image_paint fit_planar_projection bottom view paints bottom faces
     CHECK(result->states[2] == kStateNone);
     CHECK(result->states[3] == kStateNone);
     CHECK(result->diagnostics.painted_faces >= 2);
+}
+
+// ---------------------------------------------------------------------------
+// Curved projections through the full pipeline (Phase 7 sampling integration)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("run_image_paint with cylindrical projection paints faces facing radially outward", "[ImagePaint][Pipeline][Cylindrical]")
+{
+    // Two small quads positioned as if on a radius-5 cylinder around +Z:
+    // Quad A at angle 0 (x=5), outward normal +X.
+    // Quad B at angle 90 (y=5), outward normal +Y.
+    // A single fixed camera direction (planar projection) could only ever
+    // front-face one of these — both painting confirms outward_direction()
+    // is genuinely using the LOCAL radial direction at each face, not one
+    // global direction, i.e. the FaceSampler dispatch is wired correctly.
+    std::vector<Vec3f> verts = {
+        {5.f,-0.1f,-0.1f}, {5.f,0.1f,-0.1f}, {5.f,0.1f,0.1f}, {5.f,-0.1f,0.1f},
+        {-0.1f,5.f,-0.1f}, {0.1f,5.f,-0.1f}, {0.1f,5.f,0.1f}, {-0.1f,5.f,0.1f},
+    };
+    std::vector<Vec3i32> idxs = {
+        {0,1,2}, {0,2,3},   // Quad A, normal +X (angle 0)
+        {4,6,5}, {4,7,6},   // Quad B, normal +Y (angle 90)
+    };
+
+    auto fr = make_cylinder_frame(Vec3d(0,0,1), Vec3d(1,0,0), Vec3d::Zero());
+    REQUIRE(fr.has_value());
+    CylindricalProjectionSettings cyl;
+    cyl.frame = *fr;
+    cyl.height_mm = 10.0;
+    cyl.front_face_cosine_threshold = 0.5; // both quads are exactly radial, well above threshold
+
+    ImagePaintRequest req;
+    req.vertices = verts;
+    req.indices  = idxs;
+    req.projection = cyl;
+    req.filaments = one_red_filament();
+    req.quality = SamplingQuality::FastCentroid;
+    req.merge_policy = MergePolicy::OverwriteInsideMask;
+    req.cleanup.enabled = false;
+    req.quantization.target_colors = 1;
+
+    const auto image = make_solid_image(8, 8, 255, 0, 0);
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+    REQUIRE(result->states.size() == 4);
+
+    CHECK(result->states[0] == kStateExtruderMin); // Quad A, angle 0
+    CHECK(result->states[1] == kStateExtruderMin);
+    CHECK(result->states[2] == kStateExtruderMin); // Quad B, angle 90
+    CHECK(result->states[3] == kStateExtruderMin);
+}
+
+TEST_CASE("run_image_paint with cylindrical projection respects radius filtering", "[ImagePaint][Pipeline][Cylindrical]")
+{
+    // Same Quad A as above (radius 5), but max_radius_mm excludes it.
+    std::vector<Vec3f> verts = {
+        {5.f,-0.1f,-0.1f}, {5.f,0.1f,-0.1f}, {5.f,0.1f,0.1f}, {5.f,-0.1f,0.1f},
+    };
+    std::vector<Vec3i32> idxs = { {0,1,2}, {0,2,3} };
+
+    auto fr = make_cylinder_frame(Vec3d(0,0,1), Vec3d(1,0,0), Vec3d::Zero());
+    REQUIRE(fr.has_value());
+    CylindricalProjectionSettings cyl;
+    cyl.frame = *fr;
+    cyl.height_mm = 10.0;
+    cyl.front_face_cosine_threshold = 0.5;
+    cyl.max_radius_mm = 3.0; // excludes radius-5 face
+
+    ImagePaintRequest req;
+    req.vertices = verts;
+    req.indices  = idxs;
+    req.projection = cyl;
+    req.filaments = one_red_filament();
+    req.quality = SamplingQuality::FastCentroid;
+    req.merge_policy = MergePolicy::OverwriteInsideMask;
+    req.cleanup.enabled = false;
+    req.quantization.target_colors = 1;
+
+    const auto image = make_solid_image(8, 8, 255, 0, 0);
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+    CHECK(result->diagnostics.painted_faces == 0);
+    CHECK(result->states[0] == kStateNone);
+    CHECK(result->states[1] == kStateNone);
+}
+
+TEST_CASE("run_image_paint with spherical projection paints faces facing radially outward", "[ImagePaint][Pipeline][Spherical]")
+{
+    // Quad A near the +Z pole, outward normal +Z. Quad B near the equator
+    // at angle 0 (x=5), outward normal +X. Both painting confirms
+    // outward_direction() is dispatching to the spherical (centre-relative)
+    // case, not silently falling through to the planar/cylindrical one.
+    std::vector<Vec3f> verts = {
+        {-0.1f,-0.1f,5.f}, {0.1f,-0.1f,5.f}, {0.1f,0.1f,5.f}, {-0.1f,0.1f,5.f},
+        {5.f,-0.1f,-0.1f}, {5.f,0.1f,-0.1f}, {5.f,0.1f,0.1f}, {5.f,-0.1f,0.1f},
+    };
+    std::vector<Vec3i32> idxs = {
+        {0,1,2}, {0,2,3},   // Quad A (pole), normal +Z
+        {4,5,6}, {4,6,7},   // Quad B (equator), normal +X
+    };
+
+    auto fr = make_cylinder_frame(Vec3d(0,0,1), Vec3d(1,0,0), Vec3d::Zero());
+    REQUIRE(fr.has_value());
+    SphericalProjectionSettings sph;
+    sph.frame = *fr;
+    sph.front_face_cosine_threshold = 0.5;
+
+    ImagePaintRequest req;
+    req.vertices = verts;
+    req.indices  = idxs;
+    req.projection = sph;
+    req.filaments = one_red_filament();
+    req.quality = SamplingQuality::FastCentroid;
+    req.merge_policy = MergePolicy::OverwriteInsideMask;
+    req.cleanup.enabled = false;
+    req.quantization.target_colors = 1;
+
+    const auto image = make_solid_image(8, 8, 255, 0, 0);
+    const auto result = run_image_paint(req, image);
+    REQUIRE(result.has_value());
+    REQUIRE(result->states.size() == 4);
+
+    CHECK(result->states[0] == kStateExtruderMin); // Quad A, pole
+    CHECK(result->states[1] == kStateExtruderMin);
+    CHECK(result->states[2] == kStateExtruderMin); // Quad B, equator
+    CHECK(result->states[3] == kStateExtruderMin);
 }
 
 // ---------------------------------------------------------------------------
@@ -500,10 +626,12 @@ TEST_CASE("run_image_paint single-face mesh paints the face", "[ImagePaint][Pipe
     // Projector aimed at the face (along -Z, face normal = +Z).
     auto fr = make_projector_frame(Vec3d(0,0,-1), Vec3d(0,1,0), Vec3d(0.5,0.5,2.0));
     REQUIRE(fr.has_value());
-    req.projection.frame                      = *fr;
-    req.projection.width_mm                   = 2.0;
-    req.projection.height_mm                  = 2.0;
-    req.projection.front_face_cosine_threshold = 0.0;
+    PlanarProjectionSettings proj;
+    proj.frame                      = *fr;
+    proj.width_mm                   = 2.0;
+    proj.height_mm                  = 2.0;
+    proj.front_face_cosine_threshold = 0.0;
+    req.projection = proj;
     req.quality      = SamplingQuality::FastCentroid;
     req.merge_policy = MergePolicy::OverwriteInsideMask;
     req.cleanup.enabled = false;

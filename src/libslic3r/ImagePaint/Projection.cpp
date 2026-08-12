@@ -4,6 +4,7 @@
 #include <cassert>
 #include <limits>
 #include <algorithm>
+#include <type_traits>
 
 namespace Slic3r::ImagePaint {
 
@@ -265,6 +266,61 @@ ProjectedPoint project_spherical(const Vec3d&                        p,
                           rv >= 0.0 && rv <= 1.0);
 
     return ProjectedPoint{ru, rv, radius, inside};
+}
+
+ProjectedPoint project(const Vec3d& p, const ProjectionSettings& s)
+{
+    return std::visit([&](const auto& settings) -> ProjectedPoint {
+        using T = std::decay_t<decltype(settings)>;
+        if constexpr (std::is_same_v<T, PlanarProjectionSettings>)
+            return project_planar(p, settings);
+        else if constexpr (std::is_same_v<T, CylindricalProjectionSettings>)
+            return project_cylindrical(p, settings);
+        else
+            return project_spherical(p, settings);
+    }, s);
+}
+
+double alpha_threshold(const ProjectionSettings& s)
+{
+    return std::visit([](const auto& settings) { return settings.alpha_threshold; }, s);
+}
+
+double minimum_coverage(const ProjectionSettings& s)
+{
+    return std::visit([](const auto& settings) { return settings.minimum_coverage; }, s);
+}
+
+double front_face_cosine_threshold(const ProjectionSettings& s)
+{
+    return std::visit([](const auto& settings) { return settings.front_face_cosine_threshold; }, s);
+}
+
+bool paint_through(const ProjectionSettings& s)
+{
+    return std::visit([](const auto& settings) { return settings.paint_through; }, s);
+}
+
+Vec3d outward_direction(const Vec3d& p, const ProjectionSettings& s)
+{
+    constexpr double kEps = 1e-9;
+    return std::visit([&](const auto& settings) -> Vec3d {
+        using T = std::decay_t<decltype(settings)>;
+        if constexpr (std::is_same_v<T, PlanarProjectionSettings>) {
+            return -settings.frame.normal;
+        } else {
+            // Cylindrical and spherical share the same CylinderFrame shape;
+            // both want the local radial-outward direction at p.
+            const Vec3d d = p - settings.frame.origin;
+            Vec3d radial;
+            if constexpr (std::is_same_v<T, CylindricalProjectionSettings>)
+                radial = d - d.dot(settings.frame.axis) * settings.frame.axis;
+            else
+                radial = d; // spherical: outward is the full offset from centre
+            const double n = radial.norm();
+            return n > kEps ? Vec3d(radial / n) : settings.frame.radial_basis;
+        }
+    }, s);
 }
 
 } // namespace Slic3r::ImagePaint

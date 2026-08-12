@@ -217,6 +217,9 @@ void GLGizmoImagePainter::apply()
             m_status_text = fitted.error().user_message;
             return;
         }
+        // Allow somewhat oblique faces; 0.1 was excluding useful surface on organic meshes.
+        fitted->front_face_cosine_threshold = 0.05;
+        fitted->minimum_coverage = 0.25;
         req.projection = *fitted;
         m_width_mm  = static_cast<float>(fitted->width_mm);
         m_height_mm = static_cast<float>(fitted->height_mm);
@@ -229,14 +232,13 @@ void GLGizmoImagePainter::apply()
             m_status_text = fitted.error().user_message;
             return;
         }
+        fitted->width_mm  = m_width_mm;
+        fitted->height_mm = m_height_mm;
+        // Allow somewhat oblique faces; 0.1 was excluding useful surface on organic meshes.
+        fitted->front_face_cosine_threshold = 0.05;
+        fitted->minimum_coverage = 0.25;
         req.projection = *fitted;
-        req.projection.width_mm  = m_width_mm;
-        req.projection.height_mm = m_height_mm;
     }
-
-    // Allow somewhat oblique faces; 0.1 was excluding useful surface on organic meshes.
-    req.projection.front_face_cosine_threshold = 0.05;
-    req.projection.minimum_coverage = 0.25;
 
     // Filaments from the active project.
     const auto& extruder_colors = wxGetApp().plater()->get_extruder_colors_from_plater_config();

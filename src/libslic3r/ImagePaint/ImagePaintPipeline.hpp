@@ -26,8 +26,10 @@ struct ImagePaintRequest {
     std::string       image_path;
     ImageDecodeLimits decode_limits;
 
-    // Projection onto the mesh surface.
-    PlanarProjectionSettings projection;
+    // Projection onto the mesh surface. Defaults to a default-constructed
+    // PlanarProjectionSettings (the variant's first alternative) so existing
+    // callers that never touch curved projection see unchanged behavior.
+    ProjectionSettings projection;
 
     // Colour palette from the active project.
     std::vector<FilamentColor> filaments;

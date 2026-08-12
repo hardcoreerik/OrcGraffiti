@@ -190,26 +190,20 @@ if (BUILD_TESTS)
         PASS_REGULAR_EXPRESSION "\"ok\": true"
         LABELS "OrcGraffiti;CLI")
 
-    # Write + reload round trip — regression guard for the AS-3 BBS-writer
-    # bugs found this session (empty <plate> for non-3MF inputs; missing
-    # <assemble_item> for instances without an initialized assemble
-    # transform). FIXTURES_SETUP/FIXTURES_REQUIRED chains write before read.
-    set(ORCGRAFFITI_PAINT_OUT "${CMAKE_CURRENT_BINARY_DIR}/orcgraffiti_ctest_painted.3mf")
-    add_test(NAME orcgraffiti_cli_paint_out_write
+    # --out is DISABLED as of 2026-08-11 — confirmed to crash OrcaSlicer 2.4.2
+    # and hang FlashForge Studio on open, across two separate fix attempts,
+    # by direct human testing. See AI_STATUS.md's AS-3 bug history before
+    # re-enabling. This test locks in the disabled state so it can't silently
+    # regress back to "looks like it works" via this CLI's own self-checks
+    # alone — those were never sufficient evidence, which is exactly how this
+    # shipped broken twice.
+    add_test(NAME orcgraffiti_cli_paint_out_disabled
              COMMAND orcgraffiti paint "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
                      --image "${ORCGRAFFITI_FIXTURES}/pattern.png"
                      --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json"
-                     --view front --out "${ORCGRAFFITI_PAINT_OUT}" --force)
-    set_tests_properties(orcgraffiti_cli_paint_out_write PROPERTIES
-        PASS_REGULAR_EXPRESSION "\"ok\": true"
-        FIXTURES_SETUP OrcgraffitiPaintedFile
-        LABELS "OrcGraffiti;CLI")
-
-    add_test(NAME orcgraffiti_cli_paint_out_reload_has_paint
-             COMMAND orcgraffiti info "${ORCGRAFFITI_PAINT_OUT}")
-    set_tests_properties(orcgraffiti_cli_paint_out_reload_has_paint PROPERTIES
-        PASS_REGULAR_EXPRESSION "\"has_mmu_paint\": true"
-        FIXTURES_REQUIRED OrcgraffitiPaintedFile
+                     --view front --out "${CMAKE_CURRENT_BINARY_DIR}/should_not_be_written.3mf" --force)
+    set_tests_properties(orcgraffiti_cli_paint_out_disabled PROPERTIES
+        PASS_REGULAR_EXPRESSION "--out is disabled"
         LABELS "OrcGraffiti;CLI")
 endif()
 

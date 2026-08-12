@@ -45,7 +45,7 @@ void print_help()
         "  version              Print version / build type\n"
         "  help                 Show this help\n"
         "  info <input>         Inspect a model/project (JSON)\n"
-        "  paint <input>        Run the paint pipeline (--dry-run report, or --out write)\n"
+        "  paint <input>        Run the paint pipeline (--dry-run report only — see NOTE)\n"
         "\n"
         "Global options:\n"
         "  --report <path.json> Write machine-readable report to a file\n"
@@ -59,17 +59,13 @@ void print_help()
         "  --colors <n>         Target quantizer colors, 1-16 (default 4)\n"
         "  --quality <q>        fast|threepoint|gaussian7 (default gaussian7)\n"
         "  --merge <policy>     overwrite|preserve (default overwrite)\n"
-        "  --dry-run            Run pipeline, write report only, no 3MF write\n"
-        "  --out <path.3mf>     Write mode: apply the plan and save a BBS-native 3MF\n"
-        "  --force              Allow overwriting an existing --out path\n"
-        "  --allow-in-place     Allow --out to equal the input path (default: refused)\n"
+        "  --dry-run            Run pipeline, write report only, no 3MF write (REQUIRED)\n"
         "\n"
-        "Exactly one of --dry-run or --out is required for paint.\n"
-        "\n"
-        "NOTE: --out writes via Slic3r::store_bbs_3mf, this fork's native format.\n"
-        "GUI reopen has not been exhaustively verified across all input shapes yet —\n"
-        "a manual GUI check is still recommended for anything beyond a simple single-\n"
-        "object model. See AI_STATUS.md's AS-3 notes and Agent_Surface.md.\n"
+        "NOTE: --out is DISABLED. Two separate write-path fixes were each verified\n"
+        "structurally correct by this CLI's own tooling, but confirmed by direct human\n"
+        "testing to crash OrcaSlicer 2.4.2 and hang FlashForge Studio on open. Self-\n"
+        "consistency was not sufficient evidence either time. See AI_STATUS.md's AS-3\n"
+        "bug history before attempting to re-enable this.\n"
         "\n"
         "See docs/OrcGraffiti/Agent_Surface.md for the full CLI contract.\n";
 }
@@ -371,6 +367,27 @@ int cmd_paint(const PaintOptions& opt)
                                  ? "--dry-run and --out are mutually exclusive"
                                  : "exactly one of --dry-run or --out is required"} };
         std::cerr << "orcgraffiti: exactly one of --dry-run or --out is required\n";
+        return write_report_and_exit(report, opt.report_path, 1);
+    }
+
+    // DISABLED 2026-08-11: --out (store_bbs_3mf write path) produced files
+    // that crashed OrcaSlicer 2.4.2 and hung FlashForge Studio on open,
+    // confirmed by direct human testing across two separate fix attempts
+    // (missing <assemble_item>, then a dangling thumbnail relationship —
+    // both fixes were structurally verified by this CLI's own tooling but
+    // neither survived a real human open). Do not re-enable without either
+    // (a) a definitively root-caused fix verified against real slicer
+    // software, not just this CLI's self-consistency, or (b) a materially
+    // different approach (e.g. a minimal STL-only or geometry-only 3MF
+    // export with no plate/assemble/thumbnail machinery at all). See
+    // AI_STATUS.md's AS-3 bug history before attempting either.
+    if (!opt.dry_run) {
+        report["ok"] = false;
+        report["error"] = { {"code", "InvalidTarget"},
+                             {"message", "--out is disabled: confirmed to crash/hang real slicer "
+                                         "software (OrcaSlicer 2.4.2, FlashForge Studio) across two "
+                                         "fix attempts. See AI_STATUS.md's AS-3 bug history."} };
+        std::cerr << "orcgraffiti: --out is disabled pending a real fix — see AI_STATUS.md\n";
         return write_report_and_exit(report, opt.report_path, 1);
     }
 

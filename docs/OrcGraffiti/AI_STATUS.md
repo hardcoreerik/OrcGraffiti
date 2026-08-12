@@ -5,7 +5,9 @@
 Phase 6+ mapping quality green. **Agent Surface AS-1/AS-2/AS-4 implemented
 and tested; AS-3 write path (`paint --out`) DISABLED — confirmed broken
 against real slicer software twice.**
-Phase 7 (cylindrical/spherical projection) math complete for both projections.
+Phase 7: cylindrical/spherical projection math complete AND wired into the
+sampling pipeline (FaceSampler/ImagePaintPipeline) — not yet exposed via
+any CLI flag or GUI control.
 
 ## Current Branch
 
@@ -23,12 +25,47 @@ feature/image-paint-phase1-types
 
 ## Working Build
 
-- ImagePaint unit tests: **90/90** (444 assertions; cylindrical + spherical
-  projection + all 6 `--view` presets now golden-tested)
-- Full app: Release `orca-slicer.exe` builds
+- ImagePaint unit tests: **93/93** (463 assertions; cylindrical + spherical
+  projection math + pipeline integration + all 6 `--view` presets golden-tested)
+- Full app: Release `orca-slicer.exe` builds — **GUI DLL rebuilt and
+  verified this session** after the projection-variant wiring (touches
+  `GLGizmoImagePainter.cpp`), launched for the user to test the Image
+  Paint gizmo live
 - `orcgraffiti.exe`: `version`, `help`, `info`, `paint --dry-run` — links libslic3r only. **`paint --out` is disabled**, refuses with a clear error.
-- ctest: **27/27 green** (19 ImagePaint core + 8 orcgraffiti CLI contract tests)
+- ctest: **30/30 green** (22 ImagePaint core + 8 orcgraffiti CLI contract tests)
 - Sample image: `C:\Users\hardc\OneDrive\Pictures\garth.jpg`
+
+## Phase 7: cylindrical/spherical projection now wired into the pipeline
+
+`FaceSampler`/`ImagePaintPipeline` previously hardcoded
+`PlanarProjectionSettings`. Generalized via a new
+`ProjectionSettings = std::variant<Planar, Cylindrical, Spherical>` in
+`Projection.hpp`, with dispatch functions (`project()`,
+`outward_direction()`, `alpha_threshold()`, etc.) so the sampling loop in
+`FaceSampler.cpp` works identically regardless of projection type.
+
+The one genuinely new piece of logic: front-facing testing differs per
+type. Planar uses one fixed camera direction; cylindrical/spherical need
+the *local* radial-outward direction at each face's centroid, since a
+wraparound projector has no single "camera direction." `outward_direction()`
+dispatches accordingly, and the 3 new pipeline integration tests
+specifically prove this — two faces at different angles around a
+synthetic cylinder/sphere both paint correctly, which a single fixed
+direction could never achieve for both.
+
+`ImagePaintRequest::projection` changed type, which broke every direct
+field-access call site (`req.projection.width_mm = ...` style) across
+`orcgraffiti.cpp`, `GLGizmoImagePainter.cpp` (the live GUI gizmo), and the
+pipeline test file — all updated to set fields on the concrete
+`PlanarProjectionSettings` before assigning into the variant. Verified in
+order: full Catch2 suite unchanged (93/93, zero regressions), CLI builds,
+**GUI DLL builds** (confirmed via a real incremental rebuild, not
+assumed — this is the file the user's live paint-gizmo testing depends
+on), then added and passed 3 new end-to-end integration tests.
+
+**Not yet reachable by any user** — no `--view cylindrical` CLI flag, no
+GUI gizmo mode selector. This is pipeline plumbing only; exposing it is
+separate, later work.
 
 ## ⛔ AS-3 write path: DISABLED — two fix attempts each confirmed broken by real testing
 
@@ -108,25 +145,18 @@ a headless CLI has no equivalent for. There may be more such gaps.
 
 ## Next Three Tasks
 
-1. Wiring cylindrical/spherical projection into `FaceSampler`/
-   `ImagePaintPipeline` was scoped and deliberately deferred this session:
-   it requires changing `ImagePaintRequest::projection`'s type (currently
-   concrete `PlanarProjectionSettings`) to a variant, which breaks direct
-   field-access call sites in `GLGizmoImagePainter.cpp` (GUI, 4 lines),
-   `orcgraffiti.cpp`, and both pipeline/projection test files (~10+ call
-   sites total) — feasible (a full GUI DLL rebuild is available to verify
-   against, `OrcaSlicer.dll` already builds in this env) but is real,
-   bigger work deserving its own focused pass, not a tack-on. Also: with
-   no CLI flag or GUI control yet exposing curved projection selection,
-   wiring it in now has no reachable consumer — arguably premature until
-   occlusion (same roadmap section) is at least scoped, since the Phase 7
-   exit gate ("predictable images without painting hidden surfaces") needs
-   occlusion to mean anything for a cup/sphere fixture.
-2. AS-5 (MCP thin wrap) remains blocked behind AS-3 per Roadmap.md §20's
-   own gate rule ("Do not implement AS-5 before AS-3") — and AS-3 is now
-   explicitly disabled, not just unverified, so this is further blocked
-   than before.
-3. Keep PR #1 updated; GUI retest auto-fit paint with garth.jpg when convenient.
+1. Waiting on the user's live GUI test of the Image Paint gizmo (launched
+   this session, current build) — this is the real MVP verification that
+   hasn't happened yet, separate from the (disabled) CLI write path.
+2. Cylindrical/spherical projection is wired into the pipeline but has no
+   user-facing entry point yet — a `--view` extension or new flag for the
+   CLI, or a gizmo mode selector for the GUI, would be the next step to
+   make it actually usable. Occlusion (same Roadmap §11 section) still
+   needs design work before implementation — the exit gate ("predictable
+   images without painting hidden surfaces") depends on it for cup/sphere
+   fixtures to mean anything.
+3. AS-5 (MCP thin wrap) remains blocked behind AS-3 per Roadmap.md §20's
+   own gate rule — AS-3 is explicitly disabled, not just unverified.
 
 ## Open PRs
 
@@ -141,12 +171,15 @@ FlashForge Studio outright). Both underlying bugs found (missing
 `<assemble_item>`, dangling thumbnail relationship) were real and are
 documented for any future attempt, but self-consistency checks proved
 insufficient twice — `--out` now refuses cleanly with an explanatory error
-rather than risk a third silent failure. Also landed Phase 7's cylindrical
-AND spherical projection math (not yet wired into the sampling pipeline —
-deliberately deferred, see "Next Three Tasks"), plus golden tests locking
-in all 6 `--view` presets (previously only front/top were tested; back/
-left/right/bottom were "documented by inspection" per multiple prior
-devlogs). 90/90 ImagePaint test cases, 27/27 ctest. AS-4 (skill file) and
+rather than risk a third silent failure.
+
+Also this session: golden tests locking in all 6 `--view` presets
+(previously only front/top); Phase 7's cylindrical AND spherical
+projection math; then **wired both into the sampling pipeline**
+(`FaceSampler`/`ImagePaintPipeline`), verified against a real GUI DLL
+rebuild since it touches the live paint gizmo, with 3 new end-to-end
+integration tests. GUI launched for the user to test live — result
+pending. 93/93 ImagePaint test cases, 30/30 ctest. AS-4 (skill file) and
 the `LoadStrategy` fix (unaffected by the AS-3 issues above, reading works
 fine) landed earlier this session; v0.1.0-alpha tagged and released on
 GitHub.

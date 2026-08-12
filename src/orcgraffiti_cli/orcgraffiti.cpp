@@ -206,18 +206,17 @@ int cmd_info(const std::string& input_path, const std::string& report_path)
     return 0;
 }
 
-// View presets, volume-local, right-handed. "front" and "top" are locked to the
-// golden-test conventions in tests/libslic3r/test_image_paint_pipeline.cpp
-// (see Agent_Surface.md §6.5 implementation note); back/left/bottom are the
-// mirror of front/right/top pending their own golden tests.
+// Thin string-keyed wrapper over ImagePaint::view_preset_vectors — the
+// shared source of truth (also used by the GUI gizmo's view buttons).
 std::optional<std::pair<Vec3d, Vec3d>> view_preset(const std::string& name)
 {
-    if (name == "front")  return std::make_pair(Vec3d(0, 1, 0),  Vec3d(0, 0, 1));
-    if (name == "back")   return std::make_pair(Vec3d(0, -1, 0), Vec3d(0, 0, 1));
-    if (name == "right")  return std::make_pair(Vec3d(-1, 0, 0), Vec3d(0, 0, 1));
-    if (name == "left")   return std::make_pair(Vec3d(1, 0, 0),  Vec3d(0, 0, 1));
-    if (name == "top")    return std::make_pair(Vec3d(0, 0, -1), Vec3d(0, 1, 0));
-    if (name == "bottom") return std::make_pair(Vec3d(0, 0, 1),  Vec3d(0, 1, 0));
+    using ImagePaint::ViewPreset;
+    if (name == "front")  return ImagePaint::view_preset_vectors(ViewPreset::Front);
+    if (name == "back")   return ImagePaint::view_preset_vectors(ViewPreset::Back);
+    if (name == "right")  return ImagePaint::view_preset_vectors(ViewPreset::Right);
+    if (name == "left")   return ImagePaint::view_preset_vectors(ViewPreset::Left);
+    if (name == "top")    return ImagePaint::view_preset_vectors(ViewPreset::Top);
+    if (name == "bottom") return ImagePaint::view_preset_vectors(ViewPreset::Bottom);
     return std::nullopt;
 }
 

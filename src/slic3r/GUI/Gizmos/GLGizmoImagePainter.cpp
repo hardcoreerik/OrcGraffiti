@@ -1,5 +1,6 @@
 #include "GLGizmoImagePainter.hpp"
 
+#include "libslic3r/libslic3r.h"  // PI (global namespace, defined before Slic3r{})
 #include "libslic3r/Model.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/TriangleSelector.hpp"
@@ -14,15 +15,11 @@
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/ImGuiWrapper.hpp"
 #include "slic3r/GUI/format.hpp"
-#include "slic3r/GUI/GLModel.hpp"
-#include "slic3r/GUI/GLShader.hpp"
-#include "slic3r/GUI/OpenGLManager.hpp"
 #include "slic3r/GUI/Jobs/BoostThreadWorker.hpp"
 #include "slic3r/GUI/Jobs/PlaterWorker.hpp"
 #include "slic3r/GUI/Jobs/ImagePaintJob.hpp"
 #include "slic3r/GUI/3DScene.hpp"  // GLVolume::world_matrix
 
-#include <glad/gl.h>
 #include <imgui/imgui.h>
 #include <wx/filedlg.h>
 #include <wx/image.h>
@@ -70,30 +67,7 @@ void GLGizmoImagePainter::on_set_state()
         cancel_job();
         m_job_running = false;
         m_status_text.clear();
-        m_raycaster.reset();
-        m_hover_valid = false;
     }
-}
-
-void GLGizmoImagePainter::on_render()
-{
-    update_hover();
-    if (m_hover_valid)
-        render_cursor();
-}
-
-bool GLGizmoImagePainter::on_mouse(const wxMouseEvent& mouse_event)
-{
-    // Left-click stamps at the current hover point; every other event is
-    // left for the base class / camera navigation. Only a plain click (no
-    // drag) commits — Dragging is deliberately not handled here, so orbit/
-    // pan gestures that happen to start over the model don't fire repeated
-    // stamps.
-    if (mouse_event.LeftDown() && m_hover_valid && !m_job_running) {
-        stamp_at(m_hover_hit_local, m_hover_normal_local);
-        return true;
-    }
-    return false;
 }
 
 void GLGizmoImagePainter::cancel_job()
@@ -113,7 +87,7 @@ double GLGizmoImagePainter::image_aspect_ratio() const
 
 // ---------------------------------------------------------------------------
 // Fit projector to the selected mesh as seen from the current camera.
-// All math in volume-local space (Project_Truth §14).
+// All math in volume-local space (Project_Truth §14). Legacy/Advanced path.
 // ---------------------------------------------------------------------------
 
 bool GLGizmoImagePainter::fit_to_view()
@@ -177,9 +151,50 @@ bool GLGizmoImagePainter::fit_to_view()
 }
 
 // ---------------------------------------------------------------------------
+// Primary workflow: View preset (Top/Back/Front/Left/Right/Bottom, same
+// vectors as the orcgraffiti CLI's --view flag) + Size percent + Rotation.
+// No camera/raycast involved — the view preset vectors are volume-local by
+// definition, matching MakerWorld's "image fixed, move the model" mechanic
+// more closely than a camera-facing or mesh-click frame would.
+// ---------------------------------------------------------------------------
+
+std::optional<Slic3r::ImagePaint::PlanarProjectionSettings>
+GLGizmoImagePainter::build_view_preset_projection(const std::vector<Vec3f>& vertices)
+{
+    if (m_view_preset < 0) {
+        m_status_text = _u8L("Pick a view first.");
+        return std::nullopt;
+    }
+
+    const auto [look, up] = Slic3r::ImagePaint::view_preset_vectors(
+        static_cast<Slic3r::ImagePaint::ViewPreset>(m_view_preset));
+
+    Slic3r::ImagePaint::Span<const Vec3f> span(vertices.data(), vertices.size());
+    auto fitted = Slic3r::ImagePaint::fit_planar_projection(
+        span, look, up, image_aspect_ratio(), /*margin=*/1.02);
+    if (!fitted) {
+        m_status_text = fitted.error().user_message;
+        return std::nullopt;
+    }
+
+    // fit_planar_projection centres frame.origin on the fitted extent, so
+    // scaling width/height in place shrinks/grows symmetrically around that
+    // same centre — matches a "Size" slider's expected behavior.
+    const double scale = std::clamp(static_cast<double>(m_size_percent), 1.0, 100.0) / 100.0;
+    fitted->width_mm  *= scale;
+    fitted->height_mm *= scale;
+    fitted->rotation_radians = static_cast<double>(m_rotation_deg) * PI / 180.0;
+    // Allow somewhat oblique faces; 0.1 was excluding useful surface on organic meshes.
+    fitted->front_face_cosine_threshold = 0.05;
+    fitted->minimum_coverage = 0.25;
+
+    return *fitted;
+}
+
+// ---------------------------------------------------------------------------
 // Shared job submission — filaments, quantization, and ImagePaintJob dispatch
-// are identical between the click-to-stamp and legacy Apply-button paths;
-// only the projection differs. Called with req.projection already set.
+// are identical between the View-preset and legacy Apply paths; only the
+// projection differs. Called with req.projection already set.
 // ---------------------------------------------------------------------------
 
 static void submit_paint_request(Slic3r::ImagePaint::ImagePaintRequest req,
@@ -242,7 +257,8 @@ static void submit_paint_request(Slic3r::ImagePaint::ImagePaintRequest req,
 }
 
 // ---------------------------------------------------------------------------
-// Apply — legacy full-surface path: camera-facing auto-fit or manual size.
+// Apply — primary path if a View preset is selected, else falls back to the
+// legacy camera-facing auto-fit/manual-size path (Advanced section).
 // ---------------------------------------------------------------------------
 
 void GLGizmoImagePainter::apply()
@@ -295,211 +311,47 @@ void GLGizmoImagePainter::apply()
     for (const auto& t : mesh.its.indices)
         req.indices.push_back(t.cast<int32_t>());
 
-    // --- Projection in mesh-local space ---
-    // Transform world camera into mesh-local so look/up match local vertices.
-    const Camera&     cam  = m_parent.get_camera();
-    const Transform3d w2l  = glvol->world_matrix().inverse();
-    const Vec3d look_local = (w2l.linear() * cam.get_dir_forward()).normalized();
-    const Vec3d up_local   = (w2l.linear() * cam.get_dir_up()).normalized();
-
-    if (m_auto_fit_to_view || m_width_mm <= 0.f || m_height_mm <= 0.f) {
-        Slic3r::ImagePaint::Span<const Vec3f> span(req.vertices.data(), req.vertices.size());
-        auto fitted = Slic3r::ImagePaint::fit_planar_projection(
-            span, look_local, up_local, image_aspect_ratio(), /*margin=*/1.02);
-        if (!fitted) {
-            m_status_text = fitted.error().user_message;
+    if (m_view_preset >= 0) {
+        // Primary path: View preset + Size/Rotate, volume-local.
+        auto proj = build_view_preset_projection(req.vertices);
+        if (!proj)
             return;
-        }
-        // Allow somewhat oblique faces; 0.1 was excluding useful surface on organic meshes.
-        fitted->front_face_cosine_threshold = 0.05;
-        fitted->minimum_coverage = 0.25;
-        req.projection = *fitted;
-        m_width_mm  = static_cast<float>(fitted->width_mm);
-        m_height_mm = static_cast<float>(fitted->height_mm);
+        req.projection = *proj;
     } else {
-        // Manual size: still place frame with fit for origin/axes, then override size.
-        Slic3r::ImagePaint::Span<const Vec3f> span(req.vertices.data(), req.vertices.size());
-        auto fitted = Slic3r::ImagePaint::fit_planar_projection(
-            span, look_local, up_local, /*aspect=*/0.0, /*margin=*/1.0);
-        if (!fitted) {
-            m_status_text = fitted.error().user_message;
-            return;
+        // Legacy path: camera-facing auto-fit or manual size.
+        const Camera&     cam  = m_parent.get_camera();
+        const Transform3d w2l  = glvol->world_matrix().inverse();
+        const Vec3d look_local = (w2l.linear() * cam.get_dir_forward()).normalized();
+        const Vec3d up_local   = (w2l.linear() * cam.get_dir_up()).normalized();
+
+        if (m_auto_fit_to_view || m_width_mm <= 0.f || m_height_mm <= 0.f) {
+            Slic3r::ImagePaint::Span<const Vec3f> span(req.vertices.data(), req.vertices.size());
+            auto fitted = Slic3r::ImagePaint::fit_planar_projection(
+                span, look_local, up_local, image_aspect_ratio(), /*margin=*/1.02);
+            if (!fitted) {
+                m_status_text = fitted.error().user_message;
+                return;
+            }
+            fitted->front_face_cosine_threshold = 0.05;
+            fitted->minimum_coverage = 0.25;
+            req.projection = *fitted;
+            m_width_mm  = static_cast<float>(fitted->width_mm);
+            m_height_mm = static_cast<float>(fitted->height_mm);
+        } else {
+            Slic3r::ImagePaint::Span<const Vec3f> span(req.vertices.data(), req.vertices.size());
+            auto fitted = Slic3r::ImagePaint::fit_planar_projection(
+                span, look_local, up_local, /*aspect=*/0.0, /*margin=*/1.0);
+            if (!fitted) {
+                m_status_text = fitted.error().user_message;
+                return;
+            }
+            fitted->width_mm  = m_width_mm;
+            fitted->height_mm = m_height_mm;
+            fitted->front_face_cosine_threshold = 0.05;
+            fitted->minimum_coverage = 0.25;
+            req.projection = *fitted;
         }
-        fitted->width_mm  = m_width_mm;
-        fitted->height_mm = m_height_mm;
-        // Allow somewhat oblique faces; 0.1 was excluding useful surface on organic meshes.
-        fitted->front_face_cosine_threshold = 0.05;
-        fitted->minimum_coverage = 0.25;
-        req.projection = *fitted;
     }
-
-    submit_paint_request(std::move(req), mv, mesh, m_target_colors,
-                         m_status_text, m_job_running, m_worker, m_cancel);
-}
-
-// ---------------------------------------------------------------------------
-// Stamp workflow — click on the model surface to place the image there.
-// ---------------------------------------------------------------------------
-
-const ModelVolume* GLGizmoImagePainter::refresh_raycaster()
-{
-    const Selection& sel   = m_parent.get_selection();
-    const Model*     model = sel.get_model();
-    if (!model)
-        return nullptr;
-
-    const auto& vols = sel.get_volume_idxs();
-    if (vols.empty())
-        return nullptr;
-    const GLVolume* glvol = sel.get_volume(*vols.begin());
-    if (!glvol)
-        return nullptr;
-
-    const ModelVolume* mv = get_model_volume(*glvol, *model);
-    if (!mv || mv->mesh().its.indices.empty())
-        return nullptr;
-
-    if (!m_raycaster || m_raycaster_volume_id != mv->id()) {
-        m_raycaster = std::make_unique<MeshRaycaster>(mv->mesh());
-        m_raycaster_volume_id = mv->id();
-    }
-    return mv;
-}
-
-void GLGizmoImagePainter::update_hover()
-{
-    m_hover_valid = false;
-
-    if (m_job_running || std::string(m_image_path).empty())
-        return;
-
-    const Selection& sel = m_parent.get_selection();
-    const auto& vols = sel.get_volume_idxs();
-    if (vols.empty())
-        return;
-    const GLVolume* glvol = sel.get_volume(*vols.begin());
-    if (!glvol)
-        return;
-
-    if (!refresh_raycaster())
-        return;
-
-    const Camera& camera = wxGetApp().plater()->get_camera();
-    Vec3f hit, normal;
-    if (!m_raycaster->unproject_on_mesh(m_parent.get_local_mouse_position(),
-                                        glvol->world_matrix(), camera, hit, normal))
-        return;
-
-    m_hover_valid         = true;
-    m_hover_hit_local     = hit;
-    m_hover_normal_local  = normal;
-}
-
-void GLGizmoImagePainter::render_cursor() const
-{
-    const Selection& sel = m_parent.get_selection();
-    const auto& vols = sel.get_volume_idxs();
-    if (vols.empty())
-        return;
-    const GLVolume* glvol = sel.get_volume(*vols.begin());
-    if (!glvol)
-        return;
-
-    if (m_cursor_sphere == nullptr) {
-        m_cursor_sphere = std::make_shared<GLModel>();
-        m_cursor_sphere->init_from(its_make_sphere(1.0, double(PI) / 12.0));
-    }
-
-    GLShaderProgram* shader = wxGetApp().get_shader("flat");
-    if (shader == nullptr)
-        return;
-
-    shader->start_using();
-
-    const Camera& camera = wxGetApp().plater()->get_camera();
-    // Marker radius: a fraction of the stamp size, just enough to show
-    // where/how-large the next stamp will land — not a full decal outline.
-    const double marker_radius = 0.15 * std::min(m_stamp_width_mm, m_stamp_height_mm);
-    const Transform3d view_model_matrix = camera.get_view_matrix() * glvol->world_matrix() *
-        Geometry::assemble_transform(m_hover_hit_local.cast<double>()) *
-        Geometry::assemble_transform(Vec3d::Zero(), Vec3d::Zero(), marker_radius * Vec3d::Ones());
-
-    shader->set_uniform("view_model_matrix", view_model_matrix);
-    shader->set_uniform("projection_matrix", camera.get_projection_matrix());
-
-    const bool is_left_handed = Geometry::Transformation(view_model_matrix).is_left_handed();
-    if (is_left_handed)
-        glsafe(::glFrontFace(GL_CW));
-
-    m_cursor_sphere->set_color(ColorRGBA(0.3f, 0.9f, 0.3f, 0.85f)); // green = "ready to stamp"
-    m_cursor_sphere->render();
-
-    if (is_left_handed)
-        glsafe(::glFrontFace(GL_CCW));
-
-    shader->stop_using();
-}
-
-// Build an up_hint that is never (near-)parallel to look_direction.
-static Vec3d pick_up_hint(const Vec3d& look_direction)
-{
-    constexpr double kParallelEps = 0.05;
-    const Vec3d candidates[] = {Vec3d::UnitZ(), Vec3d::UnitY(), Vec3d::UnitX()};
-    for (const Vec3d& c : candidates) {
-        if (c.cross(look_direction).norm() > kParallelEps)
-            return c;
-    }
-    return Vec3d::UnitY(); // unreachable: three orthogonal axes can't all be parallel
-}
-
-void GLGizmoImagePainter::stamp_at(const Vec3f& hit_local, const Vec3f& normal_local)
-{
-    if (m_job_running)
-        return;
-
-    const std::string path(m_image_path);
-    if (path.empty()) {
-        m_status_text = _u8L("Select an image first.");
-        return;
-    }
-
-    const ModelVolume* mv = refresh_raycaster();
-    if (!mv) {
-        m_status_text = _u8L("No volume selected.");
-        return;
-    }
-    const TriangleMesh& mesh = mv->mesh();
-
-    Slic3r::ImagePaint::ImagePaintRequest req;
-    req.image_path = path;
-    req.vertices.reserve(mesh.its.vertices.size());
-    for (const auto& v : mesh.its.vertices)
-        req.vertices.push_back(v);
-    req.indices.reserve(mesh.its.indices.size());
-    for (const auto& t : mesh.its.indices)
-        req.indices.push_back(t.cast<int32_t>());
-
-    // Frame the projector at the hit point, facing into the surface along
-    // the OUTWARD normal's opposite (so the image projects onto, not away
-    // from, the mesh) — matches fit_to_view()'s "look toward the surface"
-    // convention (camera forward there plays the same role as -normal here).
-    const Vec3d origin = hit_local.cast<double>();
-    const Vec3d look    = (-normal_local).cast<double>().normalized();
-    const Vec3d up_hint = pick_up_hint(look);
-
-    auto frame = Slic3r::ImagePaint::make_projector_frame(look, up_hint, origin);
-    if (!frame) {
-        m_status_text = frame.error().user_message;
-        return;
-    }
-
-    Slic3r::ImagePaint::PlanarProjectionSettings proj;
-    proj.frame  = *frame;
-    proj.width_mm  = m_stamp_width_mm;
-    proj.height_mm = m_stamp_height_mm;
-    proj.front_face_cosine_threshold = 0.05;
-    proj.minimum_coverage = 0.25;
-    req.projection = proj;
 
     submit_paint_request(std::move(req), mv, mesh, m_target_colors,
                          m_status_text, m_job_running, m_worker, m_cancel);
@@ -561,41 +413,62 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
 
     ImGui::Separator();
 
-    // --- Stamp (primary workflow) ---
-    m_imgui->text(_L("Stamp size (mm)"));
-    ImGui::SameLine(unit * 12.f);
-    ImGui::PushItemWidth(unit * 6.f);
-    ImGui::InputFloat("##sw", &m_stamp_width_mm, 1.f, 10.f, "%.1f");
-    ImGui::SameLine();
-    ImGui::InputFloat("##sh", &m_stamp_height_mm, 1.f, 10.f, "%.1f");
+    // --- View preset buttons ---
+    m_imgui->text(_L("View"));
+    static const char* view_labels[6] = {"Front", "Back", "Left", "Right", "Top", "Bottom"};
+    for (int i = 0; i < 6; ++i) {
+        if (i > 0) ImGui::SameLine();
+        const bool selected = (m_view_preset == i);
+        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+        if (m_imgui->button(_(view_labels[i])))
+            m_view_preset = i;
+        if (selected) ImGui::PopStyleColor();
+    }
+
+    // --- Size / Rotation ---
+    m_imgui->text(_L("Size"));
+    ImGui::SameLine(unit * 8.f);
+    ImGui::PushItemWidth(unit * 14.f);
+    ImGui::SliderFloat("##size", &m_size_percent, 1.f, 100.f, "%.0f%%");
     ImGui::PopItemWidth();
-    m_stamp_width_mm  = std::max(1.f, m_stamp_width_mm);
-    m_stamp_height_mm = std::max(1.f, m_stamp_height_mm);
+
+    m_imgui->text(_L("Rotate"));
+    ImGui::SameLine(unit * 8.f);
+    ImGui::PushItemWidth(unit * 14.f);
+    ImGui::SliderFloat("##rotate", &m_rotation_deg, 0.f, 360.f, "%.0f°");
+    ImGui::PopItemWidth();
 
     // --- Colors ---
     m_imgui->text(_L("Colors"));
-    ImGui::SameLine(unit * 12.f);
+    ImGui::SameLine(unit * 8.f);
     ImGui::PushItemWidth(unit * 5.f);
     ImGui::InputInt("##colors", &m_target_colors, 1, 1);
     ImGui::PopItemWidth();
     m_target_colors = std::max(1, std::min(m_target_colors, 16));
 
+    ImGui::Separator();
+
+    // --- Apply / Cancel ---
+    m_imgui->disabled_begin(m_job_running || m_view_preset < 0);
+    if (m_imgui->button(_L("Apply")))
+        apply();
+    m_imgui->disabled_end();
+
     if (m_job_running) {
-        ImGui::Separator();
-        m_imgui->text_colored(ImVec4(0.6f, 0.6f, 0.6f, 1.f), m_status_text);
+        ImGui::SameLine();
         if (m_imgui->button(_L("Cancel")))
             cancel_job();
-    } else {
-        ImGui::Separator();
-        m_imgui->text_colored(ImVec4(0.5f, 0.5f, 0.5f, 1.f),
-                              _u8L("Click on the model to stamp the image there,\n"
-                                   "oriented to the surface at that point."));
-        if (!m_status_text.empty())
-            m_imgui->text_colored(ImVec4(0.6f, 0.6f, 0.6f, 1.f), m_status_text);
     }
 
-    // --- Advanced: legacy full-surface Apply (camera-facing plane) ---
-    if (ImGui::CollapsingHeader(_u8L("Advanced: full-surface projection").c_str())) {
+    if (m_view_preset < 0 && !m_job_running) {
+        m_imgui->text_colored(ImVec4(0.5f, 0.5f, 0.5f, 1.f), _u8L("Pick a view above to enable Apply."));
+    }
+    if (!m_status_text.empty()) {
+        m_imgui->text_colored(ImVec4(0.6f, 0.6f, 0.6f, 1.f), m_status_text);
+    }
+
+    // --- Advanced: legacy camera-facing full-surface Apply ---
+    if (ImGui::CollapsingHeader(_u8L("Advanced: camera-facing projection").c_str())) {
         ImGui::Checkbox(_u8L("Auto-fit to view").c_str(), &m_auto_fit_to_view);
         ImGui::SameLine();
         m_imgui->disabled_begin(m_job_running);
@@ -618,8 +491,12 @@ void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*botto
         m_imgui->disabled_end();
 
         m_imgui->disabled_begin(m_job_running);
-        if (m_imgui->button(_L("Apply to whole view")))
+        if (m_imgui->button(_L("Apply (camera-facing, ignores View above)"))) {
+            const int saved_preset = m_view_preset;
+            m_view_preset = -1; // force the legacy camera-facing path for this one call
             apply();
+            m_view_preset = saved_preset;
+        }
         m_imgui->disabled_end();
     }
 

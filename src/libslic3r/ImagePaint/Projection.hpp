@@ -97,6 +97,17 @@ fit_planar_projection(Span<const Vec3f> vertices,
 ProjectedPoint project_planar(const Vec3d&                   p,
                                const PlanarProjectionSettings& s);
 
+// Named look/up presets for fit_planar_projection, volume-local, right-handed.
+// Front and Top are locked to the golden-test conventions in
+// tests/libslic3r/test_image_paint_pipeline.cpp; Back/Left/Right/Bottom are
+// golden-tested too (run_image_paint fit_planar_projection <name> view ...).
+// Single source of truth for both the orcgraffiti CLI's --view flag and the
+// GUI gizmo's view buttons — must not drift between the two.
+enum class ViewPreset { Front, Back, Left, Right, Top, Bottom };
+
+// Returns {look_direction, up_hint} for the given preset.
+std::pair<Vec3d, Vec3d> view_preset_vectors(ViewPreset preset);
+
 // Apply rotation and mirror around image centre (0.5, 0.5) to a UV coordinate.
 // Called internally; exposed for tests.
 std::pair<double,double> apply_rotation_mirror(double u, double v,

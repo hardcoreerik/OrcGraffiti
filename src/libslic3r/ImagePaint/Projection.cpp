@@ -168,6 +168,19 @@ ProjectedPoint project_planar(const Vec3d&                   p,
     return ProjectedPoint{ru, rv, depth, inside};
 }
 
+std::pair<Vec3d, Vec3d> view_preset_vectors(ViewPreset preset)
+{
+    switch (preset) {
+    case ViewPreset::Front:  return {Vec3d(0, 1, 0),  Vec3d(0, 0, 1)};
+    case ViewPreset::Back:   return {Vec3d(0, -1, 0), Vec3d(0, 0, 1)};
+    case ViewPreset::Right:  return {Vec3d(-1, 0, 0), Vec3d(0, 0, 1)};
+    case ViewPreset::Left:   return {Vec3d(1, 0, 0),  Vec3d(0, 0, 1)};
+    case ViewPreset::Top:    return {Vec3d(0, 0, -1), Vec3d(0, 1, 0)};
+    case ViewPreset::Bottom: return {Vec3d(0, 0, 1),  Vec3d(0, 1, 0)};
+    }
+    return {Vec3d(0, 1, 0), Vec3d(0, 0, 1)}; // unreachable
+}
+
 Expected<CylinderFrame, ImagePaintError>
 make_cylinder_frame(const Vec3d& axis_direction,
                     const Vec3d& radial_hint,

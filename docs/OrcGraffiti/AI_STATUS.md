@@ -298,6 +298,26 @@ Verified: 100/100 `[ImagePaint]`/`[TriangleSelector]` Catch2 cases pass
 pipeline tests), full `ALL_BUILD` compiles clean (GUI DLL, CLI, all test
 suites), 559/559 ctest.
 
+## Baked-mesh architecture plan — PLANNING ONLY, not started
+
+User challenged the "no remeshing" assumption with real evidence (MakerWorld
+outputs slice fine in OrcaSlicer, worst case needs Fix Model) and asked for a
+full reassessment. Researched three areas via parallel Explore agents:
+existing mesh-replacing gizmos (Simplify/MeshBoolean/Cut), existing mesh
+repair/validation infra (CGAL, admesh), and undo/redo + 3MF handling of
+mesh-topology changes. Finding: OrcaSlicer already has a complete, tested
+pattern for exactly this (`set_mesh` + `save_painting`/`restore_painting` +
+`take_snapshot` + `changed_mesh`), used by three existing features — the
+earlier "too risky" conclusion assumed we'd build that from scratch, which
+was wrong. Full 14-point plan, with exact file/class citations, written to
+`docs/OrcGraffiti/MeshGraffiti_Bake_Plan.md`. Recommendation: keep this
+session's `TriangleSelector` virtual-subdivision work as the interactive
+preview layer (Stage A), add a real "bake to mesh" transaction (Stage B)
+reusing OrcaSlicer's existing mesh-replace pattern, staged incrementally,
+starting with the cheapest option (materialize the already-computed virtual
+leaves as real geometry — no new subdivision math needed for v1). Explicitly
+NOT started — plan awaits review before any implementation.
+
 ## Next Three Tasks
 
 1. Waiting on the user's live GUI test of the Image Paint gizmo (launched

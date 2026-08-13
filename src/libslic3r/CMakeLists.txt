@@ -50,6 +50,8 @@ set(lisbslic3r_sources
     ImagePaint/ImagePaintPipeline.cpp
     ImagePaint/MeshBake.hpp
     ImagePaint/MeshBake.cpp
+    ImagePaint/MeshRemesh.hpp
+    ImagePaint/MeshRemesh.cpp
     AABBMesh.cpp
     AABBMesh.hpp
     AABBTreeIndirect.hpp

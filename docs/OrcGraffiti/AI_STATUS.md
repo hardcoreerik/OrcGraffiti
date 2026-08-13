@@ -503,6 +503,74 @@ The "Advanced camera-facing projection inverted colors" report is
 **not yet investigated** — that legacy path wasn't touched by any recent
 change; flagged as a real, separate report to chase next, not guessed at.
 
+## Removed the "no-remesh" constraint per explicit user direction — new CDT remesh core landed
+
+User explicitly authorized dropping the MVP no-remesh guardrail for a new,
+separate exploration: "Let's build an additional gizmo that explores
+remeshing the same way Mesh Graffiti does it." Pushback received and
+applied: don't self-limit to "what's already built into OrcaSlicer" out of
+triangle-count worry — bring in whatever's actually needed. In practice
+what was needed already existed in-tree (not reused out of caution, but
+because it's genuinely the right tool): `Slic3r::Triangulation` (CGAL
+`Constrained_Delaunay_triangulation_2`, the same tool the Emboss/SVG tools
+use) and `marchsq` (marching squares contour extraction, used by SLA raster
+tooling) — both proven, neither written for this project.
+
+**New: `src/libslic3r/ImagePaint/MeshRemesh.{hpp,cpp}` —
+`remesh_by_color_boundary()`.** Per candidate face: samples a local NxN
+grid in barycentric space, classifies each sample against the same color
+clusters the rest of the pipeline uses, runs marching squares per cluster
+to trace that cluster's boundary within the local grid, feeds the traced
+rings as constraint edges into a constrained Delaunay triangulation, then
+lifts every resulting triangle back to 3D via barycentric interpolation —
+so, like `bake_candidate_mesh()`, every new vertex stays exactly on the
+original surface. Unlike the uniform-grid bake path (Option 1), triangle
+edges now actually follow the image's real color boundaries instead of a
+regular grid.
+
+### A real, reproducible crash found and fixed — not a hypothetical
+
+Initial version crashed with SIGSEGV roughly 1 run in 3 (found by testing
+repeatedly, not by inspection). Root cause: the outer triangle boundary
+was added as an *explicit* CDT constraint, which overlaps-but-doesn't-
+coincide with a cluster's own traced boundary wherever that cluster
+touches the triangle edge — the common case, not a rare one. CGAL's
+`Exact_predicates_tag` CDT requires constrained edges to never properly
+cross except at shared endpoints; violating that is undefined behavior,
+not a catchable exception, hence the non-deterministic crash rather than a
+clean error. Fix: keep the 3 corners as points (still guarantees the
+correct hull boundary, since Delaunay triangulation of a point set always
+includes its convex-hull edges, and these 3 corners are always extreme
+points of the local grid's u+v<=1 domain) but drop the redundant explicit
+boundary-edge constraints — cluster contours alone now correctly bound the
+domain. Also added an explicit pre-triangulation self-intersection check
+(`get_intersections()`, the same helper `Triangulation.cpp`'s own
+debug-only `assert` uses) so any future precondition violation degrades to
+a safe per-face fallback instead of undefined behavior in a Release build,
+where the assert is compiled out. 25/25 repeated runs clean after the fix,
+versus crashing roughly 1 in 3 before.
+
+### Known v1 limitation — tested, not just documented
+
+Contour crossing points along a mesh edge shared by two faces are computed
+independently by each face's own local grid, so adjacent faces aren't
+guaranteed to agree exactly where a color boundary crosses that shared
+edge. Piped the actual output through the existing `validate_baked_mesh()`
+(Stage 2, already built) rather than assume: on the test fixture (color
+boundary crossing the cube top face's diagonal shared edge) validation
+sometimes accepts, sometimes correctly rejects with
+`BakeInvalidGeometry` — never crashes, never silently commits a gap. Test
+asserts on that actual, tested behavior rather than an assumption.
+Documented in `MeshRemesh.hpp` as a real limitation to revisit (e.g. an
+edge-crossing-point cache shared between adjacent faces), not treated as
+disqualifying — the safety net already catches it.
+
+**Not yet done**: no GUI gizmo wired up yet — `remesh_by_color_boundary()`
+is pure, headless library code, tested directly, exactly like
+`bake_candidate_mesh()` was before its own gizmo integration. Planar
+projection only. 112/112 ImagePaint+TriangleSelector+MeshBake+MeshRemesh
+tests green.
+
 ## Viewport camera now follows the View preset button
 
 Built the concrete fix for the likely "looking at the wrong face" cause

@@ -571,6 +571,38 @@ is pure, headless library code, tested directly, exactly like
 projection only. 112/112 ImagePaint+TriangleSelector+MeshBake+MeshRemesh
 tests green.
 
+## Mesh Graffiti gizmo — real geometry, wired end to end
+
+New, separate gizmo (**"Mesh Graffiti"** in the toolbar, alongside the
+existing "Image Paint") that commits `remesh_by_color_boundary()`'s output
+as real mesh geometry, rather than per-face paint. Per user's explicit
+instruction, its panel copies GLGizmoImagePainter's proven workflow as
+closely as possible: same Image/Browse row, same View preset buttons
+(camera-follow included), same Size/Rotate/Flip, same Colors — swapping
+only "Detail" (mm-based, for virtual paint subdivision) for "Resolution"
+(an integer NxN grid size, the natural knob for CDT remesh). Deliberately
+drops the legacy camera-facing "Advanced" section — that path doesn't
+carry over to a geometry-replacing Apply.
+
+New files:
+- `src/slic3r/GUI/Gizmos/GLGizmoMeshGraffiti.{hpp,cpp}` — the gizmo.
+- `src/slic3r/GUI/Jobs/MeshRemeshJob.{hpp,cpp}` — the commit job. `process()`
+  (worker thread) decodes the image and calls `remesh_by_color_boundary()`
+  then `validate_baked_mesh()`. `finalize()` (UI thread) follows the exact
+  same real-mesh-replacement pattern researched from Simplify/MeshBoolean/
+  Cut back when the bake plan was written: `take_snapshot()` →
+  `save_painting()` → `set_mesh()` → write the new mesh's MMU colors
+  directly via a fresh `TriangleSelector` (no remap needed — the bake
+  already computed them exactly) → `restore_painting(keep_existing=true)`
+  to carry over seam/support/fuzzy and any untouched-region MMU paint →
+  `set_new_unique_id()` → hull/bbox invalidation → `changed_mesh()` for
+  reslice invalidation. Registered in `GLGizmosManager` as a new `EType`
+  entry alongside `ImagePainter`.
+
+GUI DLL + full `ALL_BUILD` clean, 112/112 core tests still green (no
+pipeline logic touched, only new gizmo/job wiring). Not yet live-tested
+by the user in the running app — that's next.
+
 ## Viewport camera now follows the View preset button
 
 Built the concrete fix for the likely "looking at the wrong face" cause

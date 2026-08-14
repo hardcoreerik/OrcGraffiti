@@ -13,7 +13,19 @@ license: AGPL-3.0-compatible derivative work
 
 This file is the authoritative source of truth for the OrcGraffiti project. Every human or AI contributor must read it before planning or modifying the codebase. When another document, issue, comment, or generated plan conflicts with this file, this file wins unless a maintainer explicitly changes it.
 
-OrcGraffiti is an OrcaSlicer-native tool that projects a 2D image onto a 3D model and converts that image into OrcaSlicer-compatible per-face multicolor painting. It must work with the user's active printer, process, filament, and plate configuration rather than importing assumptions from an external project.
+OrcGraffiti is an OrcaSlicer-native **Mesh Graffiti** tool. The product
+goal, confirmed by the maintainer, is MakerWorld MakerLab Mesh Graffiti's
+*workflow* built into OrcaSlicer — not a nearby paint gizmo, not a 3MF
+importer, and not a cloud clone:
+
+https://makerworld.com/en/makerlab/meshGraffiti?from=makerlab
+
+That means: the image stays locked to the center of the screen; the user
+orbits / pans / zooms the *model* underneath it; Size and Rotate adjust
+the locked image; Apply commits a flush, photorealistic multi-color
+result by remeshing so triangle edges follow the photo's color
+boundaries. The result must slice with the user's *current* printer,
+process, filament, and plate — MakerWorld must not replace those.
 
 The first production version is a native C++ feature in an OrcaSlicer fork. A safe Python plugin bridge may be added later.
 
@@ -36,7 +48,10 @@ OrcGraffiti solves the problem in the slicer itself.
 ## 3. Working Terminology
 
 - **OrcGraffiti**: the complete project.
-- **Image Paint**: the user-facing tool.
+- **Mesh Graffiti**: the user-facing tool that matches MakerWorld's
+  workflow (screen-locked image, orbit the model, remesh on Apply).
+- **Image Paint**: the earlier per-face MMU painter (no remesh). Still
+  ships; it is not the product goal.
 - **Face state**: the filament/extruder assignment attached to one triangle.
 - **Paint mask**: which faces may be changed.
 - **Paint plan**: an immutable computed result waiting to be applied.
@@ -47,20 +62,24 @@ OrcGraffiti solves the problem in the slicer itself.
 
 ## 4. Product Vision
 
-The user should be able to:
+The user should be able to, inside OrcaSlicer, do what MakerWorld Mesh
+Graffiti does in the browser:
 
-1. Open or create an OrcaSlicer project.
+1. Open or create an OrcaSlicer project (current printer / filaments).
 2. Select one model volume.
-3. Open Image Paint.
-4. Load PNG, JPG/JPEG, or BMP.
-5. Position, scale, rotate, mirror, crop, and project the image.
+3. Open Mesh Graffiti.
+4. Load PNG, JPG/JPEG, or BMP. The image appears locked at screen center,
+   semi-transparent, over the 3D view.
+5. Orbit / pan / zoom the *model* (normal 3D controls) until the desired
+   surface sits behind the image. Resize and rotate the image with
+   sliders while it stays on screen.
 6. Reduce the image to the current project's available filament colors.
-7. Preview actual triangle-level filament assignments.
-8. Remove tiny unprintable islands.
-9. Receive warnings when the mesh is too coarse.
-10. Apply the result as one undoable operation.
-11. Slice normally with the current printer and process settings.
-12. Save a standard Orca project 3MF whose painted facets reopen correctly.
+7. Apply. The painted region is remeshed so triangle edges follow the
+   photo's color boundaries — flush multi-color geometry, not a raised
+   sticker and not one flat color per original triangle.
+8. Undo is one snapshot. Slice with the unchanged printer/process.
+9. Save a standard Orca 3MF. Geometry and MMU colors reopen correctly.
+   Project profiles are untouched.
 
 ## 5. Core Truths
 
@@ -106,7 +125,10 @@ Applying an image must not replace, reset, or import:
 - custom machine settings;
 - calibrations.
 
-The operation changes model face annotation only.
+Image Paint (the old per-face tool) changes face annotation only.
+Mesh Graffiti also replaces mesh topology in the painted region
+(CDT remesh). Neither tool may change printer/process/filament/plate
+settings.
 
 ### 5.3 Native C++ MVP
 
@@ -122,18 +144,23 @@ The first production implementation is native C++ because it needs:
 
 The current Python plugin host is useful for inspection and experiments but intentionally exposes read-only model/mesh data.
 
-### 5.4 No remeshing in MVP
+### 5.4 Remesh is required for Mesh Graffiti (not for Image Paint)
 
-The MVP paints the existing topology. It must not:
+Image Paint still paints the existing topology.
 
-- subdivide;
-- repair;
-- collapse edges;
-- add/delete vertices;
-- reorder triangles;
-- replace the mesh.
+Mesh Graffiti **must remesh** the painted region. MakerWorld's own
+client uses image vectorization + Constrained Delaunay Triangulation
+so triangle edges follow photo color boundaries. A no-remesh painter
+cannot match that look on a coarse mesh. The maintainer explicitly
+dropped the old "no remesh in MVP" rule for this tool.
 
-Topology changes can invalidate MMU, seam, support, and fuzzy-skin annotations. Optional localized remeshing is a later, separate operation.
+Remesh rules:
+
+- stay on the original surface (barycentric lift — no emboss);
+- shared-edge color crossings computed once (no T-junctions);
+- one undo snapshot; validate manifold before commit;
+- migrate or preserve seam/support/fuzzy via the existing
+  save_painting / restore_painting path.
 
 ### 5.5 Resolution is limited by triangles
 
@@ -348,7 +375,7 @@ The MVP is not:
 - a continuous-tone printer;
 - a full mesh repair application;
 - a cloud service;
-- a MakerLab clone;
+- a copy of MakerLab's website, accounts, or exported printer settings;
 - a generic 3MF patcher;
 - a promise of photo-realistic four-color output;
 - a generic Python mutable mesh API.

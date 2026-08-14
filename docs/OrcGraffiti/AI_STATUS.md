@@ -1,16 +1,21 @@
 # OrcGraffiti AI Status
 
+## Product goal (do not re-derive)
+
+MakerWorld Mesh Graffiti's workflow, built into OrcaSlicer:
+https://makerworld.com/en/makerlab/meshGraffiti?from=makerlab
+
+Image locked to screen center → orbit/pan/zoom the model underneath →
+Size/Rotate the image → Apply as flush remeshed multi-color geometry,
+using the user's current printer and filaments. That is the whole goal.
+See `Project_Truth.md` (updated 2026-08-13).
+
 ## Current Phase
 
-Shared-edge remesh cache + Mesh Graffiti screen-locked overlay both
-landed this session (see sections below). Apply now uses the live camera
-and whatever sits behind the on-screen image — not the six View-preset
-buttons. **AS-3 `paint --out` remains DISABLED.**
-
-Human GUI confirmation on a real curved mesh is still required: the
-library remesh of `20mm_cube.obj` + `garth.jpg` is manifold, ALL_BUILD
-produced `orca-slicer.exe`, but a human still has to orbit a model under
-the overlay and click Apply.
+Pieces of that workflow exist (screen-locked overlay, camera-facing
+Apply, CDT remesh with shared-edge cache). A human has not yet signed
+off that the running app *feels and looks* like MakerWorld on a real
+model. **AS-3 `paint --out` remains DISABLED.**
 
 ## Current Branch
 

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orcgraffiti.local/schemas/paint_report.schema.json",
+  "title": "OrcGraffiti paint report",
+  "description": "Machine-readable result of orcgraffiti paint (Agent_Surface.md §6.8). Implementation deferred.",
+  "type": "object",
+  "required": ["ok", "command"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "command": { "type": "string", "const": "paint" },
+    "version": { "type": "string" },
+    "input": { "type": "string" },
+    "output": { "type": ["string", "null"] },
+    "dry_run": { "type": "boolean" },
+    "selection": {
+      "type": "object",
+      "properties": {
+        "object_index": { "type": "integer", "minimum": 0 },
+        "volume_index": { "type": "integer", "minimum": 0 },
+        "volume_id": { "type": "string" }
+      }
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" },
+        "width_px": { "type": "integer", "minimum": 1 },
+        "height_px": { "type": "integer", "minimum": 1 },
+        "aspect_w_over_h": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "properties": {
+        "space": { "type": "string", "enum": ["mesh-local", "world"] },
+        "auto_fit": { "type": "boolean" },
+        "look": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "up": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "width_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "height_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "front_face_cosine_threshold": { "type": "number" },
+        "minimum_coverage": { "type": "number" }
+      }
+    },
+    "fingerprint": {
+      "type": "object",
+      "properties": {
+        "connectivity_hash": { "type": "string" },
+        "geometry_hash": { "type": "string" },
+        "vertex_count": { "type": "integer", "minimum": 0 },
+        "triangle_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "total_faces": { "type": "integer", "minimum": 0 },
+        "candidate_faces": { "type": "integer", "minimum": 0 },
+        "painted_faces": { "type": "integer", "minimum": 0 },
+        "transparent_faces": { "type": "integer", "minimum": 0 },
+        "back_facing_faces": { "type": "integer", "minimum": 0 },
+        "painted_surface_area_mm2": { "type": "number", "minimum": 0 },
+        "coarse_mesh_warning": { "type": "boolean" },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "cluster_id": { "type": "integer", "minimum": 0 },
+          "filament_index": { "type": "integer", "minimum": 0 },
+          "delta_e": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "timings_ms": {
+      "type": "object",
+      "additionalProperties": { "type": "number", "minimum": 0 }
+    },
+    "error": {
+      "type": ["object", "null"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    }
+  },
+  "additionalProperties": true
+}

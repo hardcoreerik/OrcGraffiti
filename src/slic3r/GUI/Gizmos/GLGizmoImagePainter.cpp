@@ -1,0 +1,603 @@
+#include "GLGizmoImagePainter.hpp"
+
+#include "libslic3r/libslic3r.h"  // PI (global namespace, defined before Slic3r{})
+#include "libslic3r/Model.hpp"
+#include "libslic3r/TriangleMesh.hpp"
+#include "libslic3r/TriangleSelector.hpp"
+#include "libslic3r/ImagePaint/TopologyFingerprint.hpp"
+#include "libslic3r/ImagePaint/Projection.hpp"
+
+#include "slic3r/GUI/GLCanvas3D.hpp"
+#include "slic3r/GUI/Camera.hpp"
+#include "slic3r/GUI/GUI_App.hpp"
+#include "slic3r/GUI/Plater.hpp"
+#include "slic3r/GUI/GUI.hpp"
+#include "slic3r/GUI/I18N.hpp"
+#include "slic3r/GUI/ImGuiWrapper.hpp"
+#include "slic3r/GUI/format.hpp"
+#include "slic3r/GUI/Jobs/BoostThreadWorker.hpp"
+#include "slic3r/GUI/Jobs/PlaterWorker.hpp"
+#include "slic3r/GUI/Jobs/ImagePaintJob.hpp"
+#include "slic3r/GUI/3DScene.hpp"  // GLVolume::world_matrix
+
+#include <imgui/imgui.h>
+#include <wx/filedlg.h>
+#include <wx/image.h>
+#include <wx/string.h>
+
+#include <cassert>
+#include <cstring>
+#include <vector>
+
+namespace Slic3r::GUI {
+
+// Upper bound of the "Size" slider (percent). See build_view_preset_projection's
+// kSizeReferenceScale comment — 100% is rebased to a usable default, so this
+// needs to extend well past 100 for users who deliberately want to cover
+// most/all of a large object.
+static constexpr float kSizeSliderMax = 300.f;
+
+// ---------------------------------------------------------------------------
+
+GLGizmoImagePainter::GLGizmoImagePainter(GLCanvas3D&        parent,
+                                           const std::string& icon_filename,
+                                           unsigned int       sprite_id)
+    : GLGizmoBase(parent, icon_filename, sprite_id)
+    , m_cancel(std::make_shared<std::atomic<bool>>(false))
+{}
+
+GLGizmoImagePainter::~GLGizmoImagePainter()
+{
+    cancel_job();
+}
+
+bool GLGizmoImagePainter::on_init()
+{
+    return true;
+}
+
+std::string GLGizmoImagePainter::on_get_name() const
+{
+    return _u8L("Image Paint");
+}
+
+bool GLGizmoImagePainter::on_is_activable() const
+{
+    const Selection& sel = m_parent.get_selection();
+    return sel.is_single_full_object() || sel.is_single_volume();
+}
+
+void GLGizmoImagePainter::on_set_state()
+{
+    if (m_state == Off) {
+        cancel_job();
+        m_job_running = false;
+        m_status_text.clear();
+    }
+}
+
+void GLGizmoImagePainter::cancel_job()
+{
+    m_cancel->store(true);
+    if (m_worker)
+        m_worker->cancel_all();
+    m_cancel = std::make_shared<std::atomic<bool>>(false);
+}
+
+double GLGizmoImagePainter::image_aspect_ratio() const
+{
+    if (m_image_px_w > 0 && m_image_px_h > 0)
+        return static_cast<double>(m_image_px_w) / static_cast<double>(m_image_px_h);
+    return 0.0;
+}
+
+// ---------------------------------------------------------------------------
+// Fit projector to the selected mesh as seen from the current camera.
+// All math in volume-local space (Project_Truth §14). Legacy/Advanced path.
+// ---------------------------------------------------------------------------
+
+bool GLGizmoImagePainter::fit_to_view()
+{
+    const Selection& sel = m_parent.get_selection();
+    const Model* model = sel.get_model();
+    if (!model) {
+        m_status_text = _u8L("No model.");
+        return false;
+    }
+
+    const auto& vols = sel.get_volume_idxs();
+    if (vols.empty()) {
+        m_status_text = _u8L("No volume selected.");
+        return false;
+    }
+    const GLVolume* glvol = sel.get_volume(*vols.begin());
+    if (!glvol) {
+        m_status_text = _u8L("No volume selected.");
+        return false;
+    }
+
+    const ModelVolume* mv = get_model_volume(*glvol, *model);
+    if (!mv) {
+        m_status_text = _u8L("Cannot find selected volume.");
+        return false;
+    }
+
+    const TriangleMesh& mesh = mv->mesh();
+    if (mesh.its.vertices.empty()) {
+        m_status_text = _u8L("Selected volume has no faces.");
+        return false;
+    }
+
+    // World camera → mesh-local directions (linear part only, then re-normalize).
+    const Camera&    cam   = m_parent.get_camera();
+    const Transform3d w2l  = glvol->world_matrix().inverse();
+    const Vec3d look_local = (w2l.linear() * cam.get_dir_forward()).normalized();
+    const Vec3d up_local   = (w2l.linear() * cam.get_dir_up()).normalized();
+
+    if (look_local.norm() < 1e-8 || up_local.norm() < 1e-8) {
+        m_status_text = _u8L("Cannot build projector frame (degenerate view direction).");
+        return false;
+    }
+
+    // Snapshot vertices as Span for fit (mesh-local).
+    const auto& verts = mesh.its.vertices;
+    Slic3r::ImagePaint::Span<const Vec3f> span(verts.data(), verts.size());
+
+    auto fitted = Slic3r::ImagePaint::fit_planar_projection(
+        span, look_local, up_local, image_aspect_ratio(), /*margin=*/1.02);
+    if (!fitted) {
+        m_status_text = fitted.error().user_message;
+        return false;
+    }
+
+    m_width_mm  = static_cast<float>(fitted->width_mm);
+    m_height_mm = static_cast<float>(fitted->height_mm);
+    m_status_text = _u8L("Fitted to view.");
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Primary workflow: View preset (Top/Back/Front/Left/Right/Bottom, same
+// vectors as the orcgraffiti CLI's --view flag) + Size percent + Rotation.
+// No camera/raycast involved — the view preset vectors are volume-local by
+// definition, matching MakerWorld's "image fixed, move the model" mechanic
+// more closely than a camera-facing or mesh-click frame would.
+// ---------------------------------------------------------------------------
+
+std::optional<Slic3r::ImagePaint::PlanarProjectionSettings>
+GLGizmoImagePainter::build_view_preset_projection(const std::vector<Vec3f>& vertices)
+{
+    if (m_view_preset < 0) {
+        m_status_text = _u8L("Pick a view first.");
+        return std::nullopt;
+    }
+
+    const auto [look, up] = Slic3r::ImagePaint::view_preset_vectors(
+        static_cast<Slic3r::ImagePaint::ViewPreset>(m_view_preset));
+
+    Slic3r::ImagePaint::Span<const Vec3f> span(vertices.data(), vertices.size());
+    auto fitted = Slic3r::ImagePaint::fit_planar_projection(
+        span, look, up, image_aspect_ratio(), /*margin=*/1.02);
+    if (!fitted) {
+        m_status_text = fitted.error().user_message;
+        return std::nullopt;
+    }
+
+    // fit_planar_projection's raw result covers the ENTIRE mesh silhouette
+    // (margin 1.02) — on a large flat object that's almost always too big
+    // for a normal image (mostly background, actual content squeezed into a
+    // sliver). Empirically the usable range for a typical image on a large
+    // panel sits around 25-30% of that raw fit, so "Size 100%" is rebased to
+    // land there by default instead of forcing users to hunt near the bottom
+    // of the slider. kSizeReferenceScale is exactly that rebasing factor —
+    // the slider's range (kSizeSliderMax below) is widened accordingly so
+    // covering the whole object is still reachable for users who want it.
+    constexpr double kSizeReferenceScale = 0.30;
+    const double scale = std::clamp(static_cast<double>(m_size_percent), 1.0, static_cast<double>(kSizeSliderMax)) / 100.0
+                        * kSizeReferenceScale;
+    fitted->width_mm  *= scale;
+    fitted->height_mm *= scale;
+    fitted->rotation_radians = static_cast<double>(m_rotation_deg) * PI / 180.0;
+    fitted->mirror_u = m_mirror_u;
+    // Allow somewhat oblique faces; 0.1 was excluding useful surface on organic meshes.
+    fitted->front_face_cosine_threshold = 0.05;
+    // Lower than the old 0.25: that threshold excluded a face OUTRIGHT once
+    // less than a quarter of it was covered, so shrinking Size below the
+    // sweet spot made the image disappear face-by-face rather than fading
+    // out gradually. 0.05 lets small/edge coverage still paint what little
+    // of the image actually lands there.
+    fitted->minimum_coverage = 0.05;
+
+    return *fitted;
+}
+
+// ---------------------------------------------------------------------------
+// Shared job submission — filaments, quantization, and ImagePaintJob dispatch
+// are identical between the View-preset and legacy Apply paths; only the
+// projection differs. Called with req.projection already set.
+// ---------------------------------------------------------------------------
+
+static void submit_paint_request(Slic3r::ImagePaint::ImagePaintRequest req,
+                                  const ModelVolume* mv,
+                                  const TriangleMesh& mesh,
+                                  int target_colors,
+                                  std::string& status_text,
+                                  bool& job_running,
+                                  std::unique_ptr<Worker>& worker,
+                                  std::shared_ptr<std::atomic<bool>>& cancel_flag)
+{
+    // Filaments from the active project.
+    const auto& extruder_colors = wxGetApp().plater()->get_extruder_colors_from_plater_config();
+    for (std::size_t i = 0; i < extruder_colors.size(); ++i) {
+        Slic3r::ImagePaint::FilamentColor fc;
+        fc.project_index = static_cast<Slic3r::ImagePaint::FilamentIndex>(i);
+        fc.name = "Extruder " + std::to_string(i + 1);
+        const std::string& hex = extruder_colors[i];
+        if (hex.size() == 7 && hex[0] == '#') {
+            unsigned r = 0, g = 0, b = 0;
+            sscanf(hex.c_str() + 1, "%02x%02x%02x", &r, &g, &b);
+            fc.display_rgb = {static_cast<uint8_t>(r),
+                               static_cast<uint8_t>(g),
+                               static_cast<uint8_t>(b)};
+        }
+        req.filaments.push_back(std::move(fc));
+    }
+    if (req.filaments.empty()) {
+        status_text = _u8L("No filaments configured.");
+        return;
+    }
+
+    req.quantization.target_colors = static_cast<std::uint32_t>(
+        std::max(1, std::min(target_colors, 16)));
+    req.quality        = Slic3r::ImagePaint::SamplingQuality::Gaussian7;
+    req.merge_policy   = Slic3r::ImagePaint::MergePolicy::OverwriteInsideMask;
+    req.cleanup.enabled = true;
+
+    ImagePaintJob::Input job_input;
+    job_input.volume_id            = mv->id();
+    job_input.expected_fingerprint = Slic3r::ImagePaint::fingerprint(mesh);
+    job_input.request              = std::move(req);
+
+    cancel_flag->store(true);
+    if (worker)
+        worker->cancel_all();
+    cancel_flag = std::make_shared<std::atomic<bool>>(false);
+
+    wxWindow* parent_wnd = wxGetApp().plater();
+    if (!worker)
+        worker = std::make_unique<PlaterWorker<BoostThreadWorker>>(
+            parent_wnd, nullptr, "ImagePaintWorker");
+
+    auto job = std::make_shared<ImagePaintJob>(
+        std::move(job_input), cancel_flag, parent_wnd);
+
+    job_running = true;
+    status_text = _u8L("Computing...");
+    worker->push(std::move(job));
+}
+
+// ---------------------------------------------------------------------------
+// Apply — primary path if a View preset is selected, else falls back to the
+// legacy camera-facing auto-fit/manual-size path (Advanced section).
+// ---------------------------------------------------------------------------
+
+void GLGizmoImagePainter::apply()
+{
+    if (m_job_running)
+        return;
+
+    const std::string path(m_image_path);
+    if (path.empty()) {
+        m_status_text = _u8L("Select an image first.");
+        return;
+    }
+
+    // Retrieve the currently selected ModelVolume.
+    const Selection& sel    = m_parent.get_selection();
+    const Model&     model  = *sel.get_model();
+
+    const GLVolume* glvol = nullptr;
+    {
+        const auto& vols = sel.get_volume_idxs();
+        if (vols.empty()) {
+            m_status_text = _u8L("No volume selected.");
+            return;
+        }
+        glvol = sel.get_volume(*vols.begin());
+    }
+
+    const ModelVolume* mv = get_model_volume(*glvol, model);
+    if (!mv) {
+        m_status_text = _u8L("Cannot find selected volume.");
+        return;
+    }
+
+    // Immutable mesh snapshot — volume-local coordinates.
+    const TriangleMesh& mesh = mv->mesh();
+    if (mesh.its.indices.empty()) {
+        m_status_text = _u8L("Selected volume has no faces.");
+        return;
+    }
+
+    // Build the request.
+    Slic3r::ImagePaint::ImagePaintRequest req;
+    req.image_path = path;
+
+    req.vertices.reserve(mesh.its.vertices.size());
+    for (const auto& v : mesh.its.vertices)
+        req.vertices.push_back(v);
+
+    req.indices.reserve(mesh.its.indices.size());
+    for (const auto& t : mesh.its.indices)
+        req.indices.push_back(t.cast<int32_t>());
+
+    if (m_view_preset >= 0) {
+        // Primary path: View preset + Size/Rotate, volume-local.
+        auto proj = build_view_preset_projection(req.vertices);
+        if (!proj)
+            return;
+        req.projection = *proj;
+    } else {
+        // Legacy path: camera-facing auto-fit or manual size.
+        const Camera&     cam  = m_parent.get_camera();
+        const Transform3d w2l  = glvol->world_matrix().inverse();
+        const Vec3d look_local = (w2l.linear() * cam.get_dir_forward()).normalized();
+        const Vec3d up_local   = (w2l.linear() * cam.get_dir_up()).normalized();
+
+        if (m_auto_fit_to_view || m_width_mm <= 0.f || m_height_mm <= 0.f) {
+            Slic3r::ImagePaint::Span<const Vec3f> span(req.vertices.data(), req.vertices.size());
+            auto fitted = Slic3r::ImagePaint::fit_planar_projection(
+                span, look_local, up_local, image_aspect_ratio(), /*margin=*/1.02);
+            if (!fitted) {
+                m_status_text = fitted.error().user_message;
+                return;
+            }
+            fitted->front_face_cosine_threshold = 0.05;
+            // Consistent with the View-preset path (see kSizeReferenceScale's
+            // comment) — 0.25 excluded a face outright once less than a
+            // quarter of it was covered, making small/edge placements
+            // disappear face-by-face rather than fading out gradually.
+            fitted->minimum_coverage = 0.05;
+            req.projection = *fitted;
+            m_width_mm  = static_cast<float>(fitted->width_mm);
+            m_height_mm = static_cast<float>(fitted->height_mm);
+        } else {
+            Slic3r::ImagePaint::Span<const Vec3f> span(req.vertices.data(), req.vertices.size());
+            auto fitted = Slic3r::ImagePaint::fit_planar_projection(
+                span, look_local, up_local, /*aspect=*/0.0, /*margin=*/1.0);
+            if (!fitted) {
+                m_status_text = fitted.error().user_message;
+                return;
+            }
+            fitted->width_mm  = m_width_mm;
+            fitted->height_mm = m_height_mm;
+            fitted->front_face_cosine_threshold = 0.05;
+            // Consistent with the View-preset path (see kSizeReferenceScale's
+            // comment) — 0.25 excluded a face outright once less than a
+            // quarter of it was covered, making small/edge placements
+            // disappear face-by-face rather than fading out gradually.
+            fitted->minimum_coverage = 0.05;
+            req.projection = *fitted;
+        }
+    }
+
+    req.detail_edge_length_mm = static_cast<double>(m_detail_mm);
+
+    submit_paint_request(std::move(req), mv, mesh, m_target_colors,
+                         m_status_text, m_job_running, m_worker, m_cancel);
+}
+
+// ---------------------------------------------------------------------------
+// ImGui panel
+// ---------------------------------------------------------------------------
+
+void GLGizmoImagePainter::on_render_input_window(float x, float y, float /*bottom_limit*/)
+{
+    // Detect job completion (worker becomes idle).
+    if (m_job_running && m_worker && m_worker->is_idle()) {
+        m_job_running = false;
+        m_status_text = _u8L("Done.");
+    }
+
+    const float unit = m_imgui->scaled(1.0f);
+
+    m_imgui->push_common_window_style(m_parent.get_scale());
+    m_imgui->begin(on_get_name(),
+                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize |
+                   ImGuiWindowFlags_NoCollapse);
+
+    // --- Image path ---
+    m_imgui->text(_L("Image"));
+    ImGui::SameLine(unit * 8.f);
+    ImGui::PushItemWidth(unit * 18.f);
+    ImGui::InputText("##img_path", m_image_path, sizeof(m_image_path));
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    if (m_imgui->button(_L("Browse"))) {
+        // Parent must be a complete wxWindow type (wxGLCanvas is only forward-declared here).
+        wxFileDialog dlg(wxGetApp().plater(),
+                         _L("Open image"), "", "",
+                         "Image files (*.jpg;*.jpeg;*.png;*.bmp)|*.jpg;*.jpeg;*.png;*.bmp",
+                         wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        if (dlg.ShowModal() == wxID_OK) {
+            const std::string sel = dlg.GetPath().ToUTF8().data();
+            std::strncpy(m_image_path, sel.c_str(), sizeof(m_image_path) - 1);
+            m_image_path[sizeof(m_image_path) - 1] = '\0';
+
+            // Cache pixel size for aspect-correct fit (no full pipeline decode).
+            m_image_px_w = 0;
+            m_image_px_h = 0;
+            wxImage probe;
+            if (probe.LoadFile(wxString::FromUTF8(sel), wxBITMAP_TYPE_ANY) && probe.IsOk()) {
+                m_image_px_w = probe.GetWidth();
+                m_image_px_h = probe.GetHeight();
+            }
+        }
+    }
+
+    if (m_image_px_w > 0 && m_image_px_h > 0) {
+        ImGui::SameLine();
+        m_imgui->text_colored(ImVec4(0.55f, 0.55f, 0.55f, 1.f),
+                              GUI::format("%1%x%2%", m_image_px_w, m_image_px_h));
+    }
+
+    ImGui::Separator();
+
+    // --- View preset buttons ---
+    // Picking a preset also turns the viewport camera to match — the preset
+    // itself only changes which direction the image *projects* from, so
+    // without this the user can easily be looking at an unpainted face after
+    // Apply and mistake correct behavior for nothing having happened. Uses
+    // world axes (same as the toolbar's own view-cube buttons), so this is a
+    // viewport nicety only — it does not affect the paint math, which
+    // already resolves the projection frame in the volume's own local space
+    // regardless of camera orientation.
+    m_imgui->text(_L("View"));
+    static const char* view_labels[6] = {"Front", "Back", "Left", "Right", "Top", "Bottom"};
+    static const char* view_camera_directions[6] = {"front", "rear", "left", "right", "top", "bottom"};
+    for (int i = 0; i < 6; ++i) {
+        if (i > 0) ImGui::SameLine();
+        const bool selected = (m_view_preset == i);
+        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+        if (m_imgui->button(_(view_labels[i]))) {
+            m_view_preset = i;
+            m_parent.select_view(view_camera_directions[i]);
+        }
+        if (selected) ImGui::PopStyleColor();
+    }
+
+    // --- Size / Rotation ---
+    // Range extended past 100 — see kSizeReferenceScale in
+    // build_view_preset_projection(): 100% is rebased to a usable default
+    // size, not "cover the whole object", so reaching that (for users who
+    // deliberately want it) needs headroom beyond 100.
+    m_imgui->text(_L("Size"));
+    ImGui::SameLine(unit * 8.f);
+    ImGui::PushItemWidth(unit * 14.f);
+    ImGui::SliderFloat("##size", &m_size_percent, 1.f, kSizeSliderMax, "%.0f%%");
+    ImGui::PopItemWidth();
+
+    m_imgui->text(_L("Rotate"));
+    ImGui::SameLine(unit * 8.f);
+    ImGui::PushItemWidth(unit * 14.f);
+    ImGui::SliderFloat("##rotate", &m_rotation_deg, 0.f, 360.f, "%.0f°");
+    ImGui::PopItemWidth();
+
+    ImGui::SameLine();
+    ImGui::Checkbox(_u8L("Flip").c_str(), &m_mirror_u);
+
+    // --- Colors ---
+    // Capped at the selected printer's actual extruder/filament count —
+    // asking for more colors than there are extruders to assign them to
+    // can't produce anything the printer can actually output.
+    int max_colors = 16;
+    if (auto* plater = wxGetApp().plater()) {
+        const auto n = plater->get_extruder_colors_from_plater_config().size();
+        if (n > 0)
+            max_colors = static_cast<int>(n);
+    }
+
+    m_imgui->text(_L("Colors"));
+    ImGui::SameLine(unit * 8.f);
+    ImGui::PushItemWidth(unit * 5.f);
+    ImGui::InputInt("##colors", &m_target_colors, 1, 1);
+    ImGui::PopItemWidth();
+    m_target_colors = std::max(1, std::min(m_target_colors, max_colors));
+
+    // --- Detail ---
+    // 0.00 = off (one flat colour per original mesh triangle). Non-zero
+    // subdivides paint resolution (TriangleSelector's own split tree, not the
+    // mesh) so a colour patch isn't capped by the source mesh's triangle
+    // density. Smaller = finer detail but more triangles to compute/apply —
+    // and, critically, more tool changes once actually sliced. As a rule of
+    // thumb the printer can't usefully resolve color detail much finer than
+    // its nozzle diameter, but this is guidance, not an enforced floor: some
+    // setups (calibrated flow, non-default nozzles, techniques Orca's
+    // printer presets don't fully capture) can legitimately want finer than
+    // that, and it's not this control's job to second-guess them.
+    float nozzle_diameter_hint = 0.f;
+    if (auto* preset_bundle = wxGetApp().preset_bundle) {
+        const auto* nozzle_diameters =
+            preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
+        if (nozzle_diameters && nozzle_diameters->size() > 0)
+            nozzle_diameter_hint = static_cast<float>(nozzle_diameters->get_at(0));
+    }
+
+    m_imgui->text(_L("Detail"));
+    ImGui::SameLine(unit * 8.f);
+    ImGui::PushItemWidth(unit * 14.f);
+    ImGui::SliderFloat("##detail", &m_detail_mm, 0.f, 2.f,
+                       m_detail_mm <= 0.f ? "Off" : "%.2f mm");
+    if (ImGui::IsItemHovered()) {
+        wxString tip = _L("Subdivides each painted face's paint resolution down to this "
+                          "edge length so color patches aren't capped by the mesh's own "
+                          "triangle density. 0 = off (one flat color per original triangle). "
+                          "Finer detail means more tool changes and print time once sliced.");
+        if (nozzle_diameter_hint > 0.f)
+            tip += wxString::Format(_L(" Your printer's nozzle is %.2f mm — going much finer "
+                                       "than that usually adds print time without adding "
+                                       "visible detail, but it's not blocked."), nozzle_diameter_hint);
+        m_imgui->tooltip(tip, ImGui::GetFontSize() * 25.f);
+    }
+    ImGui::PopItemWidth();
+    m_detail_mm = std::max(0.f, std::min(m_detail_mm, 2.f));
+
+    ImGui::Separator();
+
+    // --- Apply / Cancel ---
+    m_imgui->disabled_begin(m_job_running || m_view_preset < 0);
+    if (m_imgui->button(_L("Apply")))
+        apply();
+    m_imgui->disabled_end();
+
+    if (m_job_running) {
+        ImGui::SameLine();
+        if (m_imgui->button(_L("Cancel")))
+            cancel_job();
+    }
+
+    if (m_view_preset < 0 && !m_job_running) {
+        m_imgui->text_colored(ImVec4(0.5f, 0.5f, 0.5f, 1.f), _u8L("Pick a view above to enable Apply."));
+    }
+    if (!m_status_text.empty()) {
+        m_imgui->text_colored(ImVec4(0.6f, 0.6f, 0.6f, 1.f), m_status_text);
+    }
+
+    // --- Advanced: legacy camera-facing full-surface Apply ---
+    if (ImGui::CollapsingHeader(_u8L("Advanced: camera-facing projection").c_str())) {
+        ImGui::Checkbox(_u8L("Auto-fit to view").c_str(), &m_auto_fit_to_view);
+        ImGui::SameLine();
+        m_imgui->disabled_begin(m_job_running);
+        if (m_imgui->button(_L("Fit now")))
+            fit_to_view();
+        m_imgui->disabled_end();
+
+        m_imgui->disabled_begin(m_auto_fit_to_view);
+        m_imgui->text(_L("Width (mm)"));
+        ImGui::SameLine(unit * 8.f);
+        ImGui::PushItemWidth(unit * 8.f);
+        ImGui::InputFloat("##w", &m_width_mm, 1.f, 10.f, "%.1f");
+        ImGui::PopItemWidth();
+
+        m_imgui->text(_L("Height (mm)"));
+        ImGui::SameLine(unit * 8.f);
+        ImGui::PushItemWidth(unit * 8.f);
+        ImGui::InputFloat("##h", &m_height_mm, 1.f, 10.f, "%.1f");
+        ImGui::PopItemWidth();
+        m_imgui->disabled_end();
+
+        m_imgui->disabled_begin(m_job_running);
+        if (m_imgui->button(_L("Apply (camera-facing, ignores View above)"))) {
+            const int saved_preset = m_view_preset;
+            m_view_preset = -1; // force the legacy camera-facing path for this one call
+            apply();
+            m_view_preset = saved_preset;
+        }
+        m_imgui->disabled_end();
+    }
+
+    m_imgui->end();
+    m_imgui->pop_common_window_style();
+}
+
+} // namespace Slic3r::GUI

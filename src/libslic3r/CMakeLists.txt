@@ -22,6 +22,36 @@ option(BUILD_SHARED_LIBS "Build shared libs" OFF)
 option(USE_SLIC3R_CONSOLE_LOG "Enable console logging in RelWithDebInfo builds" OFF)
 
 set(lisbslic3r_sources
+    ImagePaint/ImagePaintTypes.hpp
+    ImagePaint/ImagePaintErrors.hpp
+    ImagePaint/TopologyFingerprint.hpp
+    ImagePaint/TopologyFingerprint.cpp
+    ImagePaint/ImageDecoder.hpp
+    ImagePaint/ImageDecoder.cpp
+    ImagePaint/Projection.hpp
+    ImagePaint/Projection.cpp
+    ImagePaint/FaceSampler.hpp
+    ImagePaint/FaceSampler.cpp
+    ImagePaint/ColorSpace.hpp
+    ImagePaint/ColorSpace.cpp
+    ImagePaint/ColorDifference.hpp
+    ImagePaint/ColorDifference.cpp
+    ImagePaint/ColorQuantizer.hpp
+    ImagePaint/ColorQuantizer.cpp
+    ImagePaint/FilamentMatcher.hpp
+    ImagePaint/FilamentMatcher.cpp
+    ImagePaint/FaceAdjacency.hpp
+    ImagePaint/FaceAdjacency.cpp
+    ImagePaint/RegionCleaner.hpp
+    ImagePaint/RegionCleaner.cpp
+    ImagePaint/PaintStateMerge.hpp
+    ImagePaint/PaintStateMerge.cpp
+    ImagePaint/ImagePaintPipeline.hpp
+    ImagePaint/ImagePaintPipeline.cpp
+    ImagePaint/MeshBake.hpp
+    ImagePaint/MeshBake.cpp
+    ImagePaint/MeshRemesh.hpp
+    ImagePaint/MeshRemesh.cpp
     AABBMesh.cpp
     AABBMesh.hpp
     AABBTreeIndirect.hpp

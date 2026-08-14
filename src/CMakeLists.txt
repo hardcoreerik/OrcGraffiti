@@ -117,6 +117,96 @@ if(ORCA_TOOLS)
     target_compile_definitions(OrcaSlicer_profile_validator PRIVATE -DBOOST_ALL_NO_LIB -DBOOST_USE_WINAPI_VERSION=0x602 -DBOOST_SYSTEM_USE_UTF8)
 endif()
 
+# orcgraffiti — headless agent-surface CLI (docs/OrcGraffiti/Agent_Surface.md).
+# Single-TU executable linking libslic3r only, no wxWidgets/ImGui/OpenGL/Plater.
+add_executable(orcgraffiti orcgraffiti_cli/orcgraffiti.cpp)
+target_link_libraries(orcgraffiti libslic3r boost_headeronly libcurl OpenSSL::SSL OpenSSL::Crypto)
+target_compile_definitions(orcgraffiti PRIVATE -DBOOST_ALL_NO_LIB -DBOOST_USE_WINAPI_VERSION=0x602 -DBOOST_SYSTEM_USE_UTF8)
+
+if (BUILD_TESTS)
+    # CLI contract tests (Agent_Surface.md §12.1) — golden checks against the
+    # unit-cube fixture. Not a Catch2 suite: orcgraffiti is invoked as a
+    # subprocess and its stdout is matched with CTest's own regex checks.
+    set(ORCGRAFFITI_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/../tests/orcgraffiti_cli/fixtures")
+
+    add_test(NAME orcgraffiti_cli_version
+             COMMAND orcgraffiti version)
+    set_tests_properties(orcgraffiti_cli_version PROPERTIES
+        PASS_REGULAR_EXPRESSION "orcgraffiti [0-9.]+"
+        LABELS "OrcGraffiti;CLI")
+
+    add_test(NAME orcgraffiti_cli_info_fixture
+             COMMAND orcgraffiti info "${ORCGRAFFITI_FIXTURES}/unit_cube.stl")
+    set_tests_properties(orcgraffiti_cli_info_fixture PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"triangle_count\": 12"
+        LABELS "OrcGraffiti;CLI")
+
+    # Regression guard for the LoadStrategy bug found during AS-3 investigation:
+    # Model::read_from_file's default LoadStrategy (AddDefaultInstances alone)
+    # omits LoadModel/LoadConfig, which makes the BBS 3MF importer silently
+    # populate zero objects for any .3mf input. full_load_strategy() in
+    # orcgraffiti.cpp fixes this — this test locks it in.
+    add_test(NAME orcgraffiti_cli_info_3mf_fixture
+             COMMAND orcgraffiti info "${ORCGRAFFITI_FIXTURES}/sample_project.3mf")
+    set_tests_properties(orcgraffiti_cli_info_3mf_fixture PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"ok\": true"
+        LABELS "OrcGraffiti;CLI")
+
+    # Domain-error paths exit non-zero; PASS_REGULAR_EXPRESSION alone makes
+    # CTest judge pass/fail purely on stdout content, not the exit code.
+    add_test(NAME orcgraffiti_cli_info_missing_file
+             COMMAND orcgraffiti info "${ORCGRAFFITI_FIXTURES}/does_not_exist.stl")
+    set_tests_properties(orcgraffiti_cli_info_missing_file PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"code\": \"ModelLoadFailed\""
+        LABELS "OrcGraffiti;CLI")
+
+    add_test(NAME orcgraffiti_cli_paint_requires_dry_run_or_out
+             COMMAND orcgraffiti paint "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --image "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json")
+    set_tests_properties(orcgraffiti_cli_paint_requires_dry_run_or_out PROPERTIES
+        PASS_REGULAR_EXPRESSION "exactly one of --dry-run or --out is required"
+        LABELS "OrcGraffiti;CLI")
+
+    add_test(NAME orcgraffiti_cli_paint_both_dry_run_and_out_rejected
+             COMMAND orcgraffiti paint "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --image "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json"
+                     --dry-run --out "${CMAKE_CURRENT_BINARY_DIR}/should_not_be_written.3mf")
+    set_tests_properties(orcgraffiti_cli_paint_both_dry_run_and_out_rejected PROPERTIES
+        PASS_REGULAR_EXPRESSION "mutually exclusive"
+        LABELS "OrcGraffiti;CLI")
+
+    # Real dry-run using the committed tiny PNG fixture (pattern.png, 4x4 —
+    # generated in Python, not from any external/user image) rather than a
+    # nonsense --image path, so this actually exercises the decode+sample
+    # pipeline instead of just the flag-validation paths above.
+    add_test(NAME orcgraffiti_cli_paint_dry_run_fixture
+             COMMAND orcgraffiti paint "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --image "${ORCGRAFFITI_FIXTURES}/pattern.png"
+                     --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json"
+                     --view front --dry-run)
+    set_tests_properties(orcgraffiti_cli_paint_dry_run_fixture PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"ok\": true"
+        LABELS "OrcGraffiti;CLI")
+
+    # --out is DISABLED as of 2026-08-11 — confirmed to crash OrcaSlicer 2.4.2
+    # and hang FlashForge Studio on open, across two separate fix attempts,
+    # by direct human testing. See AI_STATUS.md's AS-3 bug history before
+    # re-enabling. This test locks in the disabled state so it can't silently
+    # regress back to "looks like it works" via this CLI's own self-checks
+    # alone — those were never sufficient evidence, which is exactly how this
+    # shipped broken twice.
+    add_test(NAME orcgraffiti_cli_paint_out_disabled
+             COMMAND orcgraffiti paint "${ORCGRAFFITI_FIXTURES}/unit_cube.stl"
+                     --image "${ORCGRAFFITI_FIXTURES}/pattern.png"
+                     --filaments "${ORCGRAFFITI_FIXTURES}/filaments.json"
+                     --view front --out "${CMAKE_CURRENT_BINARY_DIR}/should_not_be_written.3mf" --force)
+    set_tests_properties(orcgraffiti_cli_paint_out_disabled PROPERTIES
+        PASS_REGULAR_EXPRESSION "--out is disabled"
+        LABELS "OrcGraffiti;CLI")
+endif()
+
 # Create a slic3r executable
 # Process manifests for various platforms.
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/dev-utils/platform/msw/OrcaSlicer.rc.in ${CMAKE_CURRENT_BINARY_DIR}/OrcaSlicer.rc @ONLY)

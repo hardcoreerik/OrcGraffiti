@@ -158,6 +158,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/Gizmos/GLGizmoBase.hpp
     GUI/Gizmos/GLGizmoBrimEars.cpp
     GUI/Gizmos/GLGizmoBrimEars.hpp
+    GUI/Gizmos/GLGizmoImagePainter.cpp
+    GUI/Gizmos/GLGizmoImagePainter.hpp
+    GUI/Gizmos/GLGizmoMeshGraffiti.cpp
+    GUI/Gizmos/GLGizmoMeshGraffiti.hpp
     GUI/Gizmos/GLGizmoCut.cpp
     GUI/Gizmos/GLGizmoCut.hpp
     GUI/Gizmos/GLGizmoEmboss.cpp
@@ -303,6 +307,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/Jobs/CreateFontStyleImagesJob.hpp
     GUI/Jobs/EmbossJob.cpp
     GUI/Jobs/EmbossJob.hpp
+    GUI/Jobs/ImagePaintJob.cpp
+    GUI/Jobs/ImagePaintJob.hpp
+    GUI/Jobs/MeshRemeshJob.cpp
+    GUI/Jobs/MeshRemeshJob.hpp
     GUI/Jobs/FillBedJob.cpp
     GUI/Jobs/FillBedJob.hpp
     GUI/Jobs/Job.hpp

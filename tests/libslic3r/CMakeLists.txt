@@ -2,6 +2,12 @@ get_filename_component(_TEST_NAME ${CMAKE_CURRENT_LIST_DIR} NAME)
 
 add_executable(${_TEST_NAME}_tests
     ${_TEST_NAME}_tests.cpp
+    test_image_paint_fingerprint.cpp
+    test_image_paint_projection.cpp
+    test_image_paint_color.cpp
+    test_image_paint_pipeline.cpp
+    test_mesh_bake.cpp
+    test_mesh_remesh.cpp
     test_3mf.cpp
     test_aabbindirect.cpp
     test_appconfig.cpp
@@ -37,6 +43,7 @@ add_executable(${_TEST_NAME}_tests
     test_ordering_strategies.cpp
     # test_png_io.cpp
     test_indexed_triangle_set.cpp
+    test_triangle_selector.cpp
     ../libnest2d/printer_parts.cpp
     )
 

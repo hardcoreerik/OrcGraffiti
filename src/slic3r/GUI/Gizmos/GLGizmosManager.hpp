@@ -90,6 +90,8 @@ public:
         Assembly,
         Simplify,
         BrimEars,
+        ImagePainter,  // OrcGraffiti: image-to-MMU-paint projection
+        MeshGraffiti,  // OrcGraffiti: color-boundary-following remesh (real geometry)
         //SlaSupports,
         // BBS
         //FaceRecognition,

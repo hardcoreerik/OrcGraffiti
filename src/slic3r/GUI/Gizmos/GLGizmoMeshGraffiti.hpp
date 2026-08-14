@@ -7,6 +7,7 @@
 #include "libslic3r/ImagePaint/Projection.hpp"
 #include "libslic3r/ObjectID.hpp"
 
+#include "slic3r/GUI/GLTexture.hpp"
 #include "slic3r/GUI/Jobs/Worker.hpp"
 
 #include <atomic>
@@ -20,18 +21,16 @@ namespace Slic3r::GUI {
 // libslic3r/ImagePaint/MeshRemesh.hpp), instead of per-face MMU painting on
 // the unchanged mesh (that's GLGizmoImagePainter, kept separate/unchanged).
 //
-// Workflow deliberately mirrors GLGizmoImagePainter's View/Size/Rotate/Flip/
-// Colors panel as closely as possible — both already replicate MakerWorld's
-// Mesh Graffiti tool (image fixed to a view direction, model positioned via
-// preset buttons + Size/Rotate, not a camera-facing/raycast frame). This
-// gizmo drops the legacy camera-facing "Advanced" section entirely — it
-// isn't part of that workflow, and doesn't fit a geometry-replacing Apply
-// (no auto-fit-to-current-camera concept makes sense once Apply produces a
-// new baked mesh rather than paint data than can be freely re-applied).
+// MakerWorld workflow: the image is a screen-space overlay locked to the
+// center of the 3D viewport. The user orbits/pans/zooms the camera (or
+// moves the object) until the desired surface sits behind the image, then
+// Apply. Size% and Rotate change the overlay live; paint math is the
+// camera-facing plane at the object's current pose — not a View-preset
+// silhouette. Look buttons are camera shortcuts only.
 //
-// Coordinate space: mesh snapshot and view-preset vectors are volume-local,
-// same as GLGizmoImagePainter — see that gizmo's header for the invariant
-// notes (INV-009) that also apply here unchanged.
+// Coordinate space: mesh snapshot is volume-local; camera look/up/origin
+// are transformed through GLVolume::world_matrix().inverse() before
+// make_projector_frame (INV-009). Overlay rendering is screen pixels.
 class GLGizmoMeshGraffiti : public GLGizmoBase
 {
 public:
@@ -51,24 +50,30 @@ private:
     void apply();
     void cancel_job();
     double image_aspect_ratio() const;
+    bool ensure_overlay_texture();
+    void overlay_pixel_size(float& out_w, float& out_h) const;
+    void render_screen_overlay();
 
     std::optional<Slic3r::ImagePaint::PlanarProjectionSettings>
-    build_view_preset_projection(const std::vector<Vec3f>& vertices);
+    build_camera_facing_projection(const GLVolume& glvol);
 
     char  m_image_path[1024] = {};
     int   m_image_px_w = 0;
     int   m_image_px_h = 0;
 
-    int   m_view_preset   = -1; // indexes Slic3r::ImagePaint::ViewPreset
+    // Last Look-button press — camera shortcut highlight only, never
+    // consumed by Apply.
+    int   m_look_preset  = -1;
     float m_size_percent  = 100.f;
     float m_rotation_deg  = 0.f;
     bool  m_mirror_u      = false;
     int   m_target_colors = 4;
 
-    // CDT grid resolution (NxN local barycentric grid per remeshed face) —
-    // the remesh analogue of GLGizmoImagePainter's mm-based Detail slider.
-    // Higher = finer boundary tracing, more triangles.
+    // CDT grid resolution (NxN local barycentric grid per remeshed face).
     int   m_grid_resolution = 12;
+
+    GLTexture  m_overlay;
+    std::string m_overlay_path;
 
     std::unique_ptr<Worker>            m_worker;
     std::shared_ptr<std::atomic<bool>> m_cancel;

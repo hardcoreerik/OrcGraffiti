@@ -6,6 +6,7 @@
 #include "libslic3r/ImagePaint/TopologyFingerprint.hpp"
 #include "libslic3r/ImagePaint/Projection.hpp"
 
+#include "slic3r/GUI/Camera.hpp"
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Plater.hpp"
@@ -23,16 +24,44 @@
 #include <wx/image.h>
 #include <wx/string.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <vector>
 
 namespace Slic3r::GUI {
 
-// Same rebasing/range as GLGizmoImagePainter's Size slider — see that
-// gizmo's kSizeReferenceScale comment. Kept identical on purpose so the two
-// tools feel like the same workflow.
-static constexpr float kSizeSliderMax = 300.f;
+// Size 100% = this fraction of the shorter canvas edge. Range goes to
+// kSizeSliderMax so the overlay can still cover the whole view.
+static constexpr float kSizeSliderMax         = 300.f;
+static constexpr float kOverlayBaseFraction   = 0.45f;
+static constexpr int   kOverlayAlpha          = 150;
+
+static bool load_overlay_rgba(GLTexture& tex, const std::string& path, int& w, int& h)
+{
+    wxImage img;
+    if (!img.LoadFile(wxString::FromUTF8(path), wxBITMAP_TYPE_ANY) || !img.IsOk())
+        return false;
+    w = img.GetWidth();
+    h = img.GetHeight();
+    if (w <= 0 || h <= 0)
+        return false;
+
+    std::vector<unsigned char> rgba(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4);
+    const unsigned char* rgb = img.GetData();
+    const unsigned char* a   = img.HasAlpha() ? img.GetAlpha() : nullptr;
+    const int n = w * h;
+    for (int i = 0; i < n; ++i) {
+        rgba[static_cast<std::size_t>(i) * 4 + 0] = rgb[i * 3 + 0];
+        rgba[static_cast<std::size_t>(i) * 4 + 1] = rgb[i * 3 + 1];
+        rgba[static_cast<std::size_t>(i) * 4 + 2] = rgb[i * 3 + 2];
+        rgba[static_cast<std::size_t>(i) * 4 + 3] = a ? a[i] : 255;
+    }
+    return tex.load_from_raw_data(std::move(rgba),
+                                  static_cast<unsigned int>(w),
+                                  static_cast<unsigned int>(h),
+                                  false);
+}
 
 // ---------------------------------------------------------------------------
 
@@ -70,6 +99,8 @@ void GLGizmoMeshGraffiti::on_set_state()
         cancel_job();
         m_job_running = false;
         m_status_text.clear();
+        m_overlay.reset();
+        m_overlay_path.clear();
     }
 }
 
@@ -88,43 +119,152 @@ double GLGizmoMeshGraffiti::image_aspect_ratio() const
     return 0.0;
 }
 
+bool GLGizmoMeshGraffiti::ensure_overlay_texture()
+{
+    const std::string path(m_image_path);
+    if (path.empty()) {
+        m_overlay.reset();
+        m_overlay_path.clear();
+        return false;
+    }
+    if (path == m_overlay_path && m_overlay.get_id() != 0)
+        return true;
+
+    int w = 0, h = 0;
+    if (!load_overlay_rgba(m_overlay, path, w, h)) {
+        m_overlay.reset();
+        m_overlay_path.clear();
+        return false;
+    }
+    m_overlay_path = path;
+    m_image_px_w = w;
+    m_image_px_h = h;
+    return true;
+}
+
+void GLGizmoMeshGraffiti::overlay_pixel_size(float& out_w, float& out_h) const
+{
+    const Size cs = m_parent.get_canvas_size();
+    const float shorter = static_cast<float>(std::max(1, std::min(cs.get_width(), cs.get_height())));
+    const float scale = std::clamp(m_size_percent, 1.f, kSizeSliderMax) / 100.f;
+    const float base  = shorter * kOverlayBaseFraction * scale;
+    const double aspect = image_aspect_ratio();
+    if (aspect > 1e-6) {
+        if (aspect >= 1.0) {
+            out_w = base;
+            out_h = static_cast<float>(base / aspect);
+        } else {
+            out_h = base;
+            out_w = static_cast<float>(base * aspect);
+        }
+    } else {
+        out_w = base;
+        out_h = base;
+    }
+}
+
+void GLGizmoMeshGraffiti::render_screen_overlay()
+{
+    if (!ensure_overlay_texture())
+        return;
+
+    float ow = 0.f, oh = 0.f;
+    overlay_pixel_size(ow, oh);
+    if (ow < 1.f || oh < 1.f)
+        return;
+
+    const Size cs = m_parent.get_canvas_size();
+    const ImVec2 center(static_cast<float>(cs.get_width()) * 0.5f,
+                        static_cast<float>(cs.get_height()) * 0.5f);
+
+    // Same 2D rotation as apply_rotation_mirror so the overlay and the
+    // paint plane stay aligned when the Rotate slider moves.
+    const double rad = static_cast<double>(m_rotation_deg) * PI / 180.0;
+    const float  cos_r = static_cast<float>(std::cos(rad));
+    const float  sin_r = static_cast<float>(std::sin(rad));
+    auto rot = [&](float x, float y) -> ImVec2 {
+        return ImVec2(center.x + cos_r * x + sin_r * y,
+                      center.y - sin_r * x + cos_r * y);
+    };
+
+    const ImVec2 p1 = rot(-ow * 0.5f, -oh * 0.5f);
+    const ImVec2 p2 = rot( ow * 0.5f, -oh * 0.5f);
+    const ImVec2 p3 = rot( ow * 0.5f,  oh * 0.5f);
+    const ImVec2 p4 = rot(-ow * 0.5f,  oh * 0.5f);
+
+    ImVec2 uv1(0.f, 0.f), uv2(1.f, 0.f), uv3(1.f, 1.f), uv4(0.f, 1.f);
+    if (m_mirror_u) {
+        std::swap(uv1, uv2);
+        std::swap(uv4, uv3);
+    }
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImTextureID tid = reinterpret_cast<ImTextureID>(static_cast<intptr_t>(m_overlay.get_id()));
+    dl->AddImageQuad(tid, p1, p2, p3, p4, uv1, uv2, uv3, uv4,
+                     IM_COL32(255, 255, 255, kOverlayAlpha));
+    dl->AddQuad(p1, p2, p3, p4, IM_COL32(255, 255, 255, 70), 1.0f);
+}
+
 // ---------------------------------------------------------------------------
-// View preset (Top/Back/Front/Left/Right/Bottom) + Size percent + Rotation.
-// Identical logic/constants to GLGizmoImagePainter::build_view_preset_projection
-// — see that function's comments for why Size is rebased and the coverage
-// threshold is 0.05.
+// Camera-facing plane whose millimetre size matches the on-screen overlay
+// at the selected volume's depth. Volume-local via world_matrix inverse.
 // ---------------------------------------------------------------------------
 
 std::optional<Slic3r::ImagePaint::PlanarProjectionSettings>
-GLGizmoMeshGraffiti::build_view_preset_projection(const std::vector<Vec3f>& vertices)
+GLGizmoMeshGraffiti::build_camera_facing_projection(const GLVolume& glvol)
 {
-    if (m_view_preset < 0) {
-        m_status_text = _u8L("Pick a view first.");
+    Camera& cam = m_parent.get_camera();
+    const Transform3d w2l = glvol.world_matrix().inverse();
+    const Vec3d look_local = (w2l.linear() * cam.get_dir_forward()).normalized();
+    const Vec3d up_local   = (w2l.linear() * cam.get_dir_up()).normalized();
+    if (look_local.norm() < 1e-8 || up_local.norm() < 1e-8) {
+        m_status_text = _u8L("Cannot build projector frame (degenerate view direction).");
         return std::nullopt;
     }
 
-    const auto [look, up] = Slic3r::ImagePaint::view_preset_vectors(
-        static_cast<Slic3r::ImagePaint::ViewPreset>(m_view_preset));
-
-    Slic3r::ImagePaint::Span<const Vec3f> span(vertices.data(), vertices.size());
-    auto fitted = Slic3r::ImagePaint::fit_planar_projection(
-        span, look, up, image_aspect_ratio(), /*margin=*/1.02);
-    if (!fitted) {
-        m_status_text = fitted.error().user_message;
+    const Vec3d cam_pos = cam.get_position();
+    const Vec3d fwd     = cam.get_dir_forward();
+    const Vec3d bbox_c  = glvol.transformed_bounding_box().center();
+    const double dist   = (bbox_c - cam_pos).dot(fwd);
+    if (dist <= 1e-3) {
+        m_status_text = _u8L("Model is not in front of the camera.");
         return std::nullopt;
     }
 
-    constexpr double kSizeReferenceScale = 0.30;
-    const double scale = std::clamp(static_cast<double>(m_size_percent), 1.0, static_cast<double>(kSizeSliderMax)) / 100.0
-                        * kSizeReferenceScale;
-    fitted->width_mm  *= scale;
-    fitted->height_mm *= scale;
-    fitted->rotation_radians = static_cast<double>(m_rotation_deg) * PI / 180.0;
-    fitted->mirror_u = m_mirror_u;
-    fitted->front_face_cosine_threshold = 0.05;
-    fitted->minimum_coverage = 0.05;
+    const Vec3d origin_local = w2l * (cam_pos + dist * fwd);
+    auto frame = Slic3r::ImagePaint::make_projector_frame(look_local, up_local, origin_local);
+    if (!frame) {
+        m_status_text = frame.error().user_message;
+        return std::nullopt;
+    }
 
-    return *fitted;
+    float ow = 0.f, oh = 0.f;
+    overlay_pixel_size(ow, oh);
+    const Size cs = m_parent.get_canvas_size();
+    const double vp_w = static_cast<double>(std::max(1, cs.get_width()));
+    const double vp_h = static_cast<double>(std::max(1, cs.get_height()));
+
+    double width_mm = 0.0, height_mm = 0.0;
+    Slic3r::ImagePaint::screen_overlay_to_plane_mm(
+        static_cast<double>(ow) / vp_w,
+        static_cast<double>(oh) / vp_h,
+        cam.get_near_width(), cam.get_near_height(), cam.get_near_z(),
+        dist, cam.get_type() == Camera::EType::Perspective,
+        width_mm, height_mm);
+    if (width_mm < 1e-6 || height_mm < 1e-6) {
+        m_status_text = _u8L("Overlay is too small to project.");
+        return std::nullopt;
+    }
+
+    Slic3r::ImagePaint::PlanarProjectionSettings s;
+    s.frame = *frame;
+    s.width_mm  = width_mm;
+    s.height_mm = height_mm;
+    s.rotation_radians = static_cast<double>(m_rotation_deg) * PI / 180.0;
+    s.mirror_u = m_mirror_u;
+    s.front_face_cosine_threshold = 0.05;
+    s.minimum_coverage = 0.05;
+    return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -179,14 +319,12 @@ void GLGizmoMeshGraffiti::apply()
     for (const auto& t : mesh.its.indices)
         input.indices.push_back(t.cast<int32_t>());
 
-    auto proj = build_view_preset_projection(input.vertices);
+    auto proj = build_camera_facing_projection(*glvol);
     if (!proj)
         return;
     input.projection = *proj;
     input.grid_resolution = m_grid_resolution;
 
-    // Filaments from the active project — same source of truth
-    // GLGizmoImagePainter's submit_paint_request uses.
     const auto& extruder_colors = wxGetApp().plater()->get_extruder_colors_from_plater_config();
     for (std::size_t i = 0; i < extruder_colors.size(); ++i) {
         Slic3r::ImagePaint::FilamentColor fc;
@@ -227,8 +365,7 @@ void GLGizmoMeshGraffiti::apply()
 }
 
 // ---------------------------------------------------------------------------
-// ImGui panel — deliberately the same shape as GLGizmoImagePainter's, minus
-// the legacy camera-facing "Advanced" section (see header comment).
+// ImGui panel + screen-locked overlay.
 // ---------------------------------------------------------------------------
 
 void GLGizmoMeshGraffiti::on_render_input_window(float x, float y, float /*bottom_limit*/)
@@ -238,6 +375,8 @@ void GLGizmoMeshGraffiti::on_render_input_window(float x, float y, float /*botto
         m_status_text = _u8L("Done.");
     }
 
+    render_screen_overlay();
+
     const float unit = m_imgui->scaled(1.0f);
 
     m_imgui->push_common_window_style(m_parent.get_scale());
@@ -245,7 +384,6 @@ void GLGizmoMeshGraffiti::on_render_input_window(float x, float y, float /*botto
                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize |
                    ImGuiWindowFlags_NoCollapse);
 
-    // --- Image path ---
     m_imgui->text(_L("Image"));
     ImGui::SameLine(unit * 8.f);
     ImGui::PushItemWidth(unit * 18.f);
@@ -261,14 +399,10 @@ void GLGizmoMeshGraffiti::on_render_input_window(float x, float y, float /*botto
             const std::string sel = dlg.GetPath().ToUTF8().data();
             std::strncpy(m_image_path, sel.c_str(), sizeof(m_image_path) - 1);
             m_image_path[sizeof(m_image_path) - 1] = '\0';
-
-            m_image_px_w = 0;
-            m_image_px_h = 0;
-            wxImage probe;
-            if (probe.LoadFile(wxString::FromUTF8(sel), wxBITMAP_TYPE_ANY) && probe.IsOk()) {
-                m_image_px_w = probe.GetWidth();
-                m_image_px_h = probe.GetHeight();
-            }
+            m_overlay.reset();
+            m_overlay_path.clear();
+            if (!ensure_overlay_texture())
+                m_status_text = _u8L("Could not load image.");
         }
     }
 
@@ -280,24 +414,21 @@ void GLGizmoMeshGraffiti::on_render_input_window(float x, float y, float /*botto
 
     ImGui::Separator();
 
-    // --- View preset buttons — turns the viewport camera to match, same as
-    // GLGizmoImagePainter's, so the user is looking at what they just told
-    // the tool to remesh.
-    m_imgui->text(_L("View"));
+    // Camera shortcuts only — they do not feed Apply.
+    m_imgui->text(_L("Look"));
     static const char* view_labels[6] = {"Front", "Back", "Left", "Right", "Top", "Bottom"};
     static const char* view_camera_directions[6] = {"front", "rear", "left", "right", "top", "bottom"};
     for (int i = 0; i < 6; ++i) {
         if (i > 0) ImGui::SameLine();
-        const bool selected = (m_view_preset == i);
+        const bool selected = (m_look_preset == i);
         if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
         if (m_imgui->button(_(view_labels[i]))) {
-            m_view_preset = i;
+            m_look_preset = i;
             m_parent.select_view(view_camera_directions[i]);
         }
         if (selected) ImGui::PopStyleColor();
     }
 
-    // --- Size / Rotation / Flip ---
     m_imgui->text(_L("Size"));
     ImGui::SameLine(unit * 8.f);
     ImGui::PushItemWidth(unit * 14.f);
@@ -313,7 +444,6 @@ void GLGizmoMeshGraffiti::on_render_input_window(float x, float y, float /*botto
     ImGui::SameLine();
     ImGui::Checkbox(_u8L("Flip").c_str(), &m_mirror_u);
 
-    // --- Colors ---
     int max_colors = 16;
     if (auto* plater = wxGetApp().plater()) {
         const auto n = plater->get_extruder_colors_from_plater_config().size();
@@ -328,7 +458,6 @@ void GLGizmoMeshGraffiti::on_render_input_window(float x, float y, float /*botto
     ImGui::PopItemWidth();
     m_target_colors = std::max(1, std::min(m_target_colors, max_colors));
 
-    // --- Resolution ---
     m_imgui->text(_L("Resolution"));
     ImGui::SameLine(unit * 8.f);
     ImGui::PushItemWidth(unit * 14.f);
@@ -343,8 +472,8 @@ void GLGizmoMeshGraffiti::on_render_input_window(float x, float y, float /*botto
 
     ImGui::Separator();
 
-    // --- Apply / Cancel ---
-    m_imgui->disabled_begin(m_job_running || m_view_preset < 0);
+    const bool have_image = m_image_path[0] != '\0';
+    m_imgui->disabled_begin(m_job_running || !have_image);
     if (m_imgui->button(_L("Apply")))
         apply();
     m_imgui->disabled_end();
@@ -355,15 +484,16 @@ void GLGizmoMeshGraffiti::on_render_input_window(float x, float y, float /*botto
             cancel_job();
     }
 
-    if (m_view_preset < 0 && !m_job_running) {
-        m_imgui->text_colored(ImVec4(0.5f, 0.5f, 0.5f, 1.f), _u8L("Pick a view above to enable Apply."));
+    if (!have_image && !m_job_running) {
+        m_imgui->text_colored(ImVec4(0.5f, 0.5f, 0.5f, 1.f),
+                              _u8L("Load an image. Orbit the model under it, then Apply."));
     }
     if (!m_status_text.empty()) {
         m_imgui->text_colored(ImVec4(0.6f, 0.6f, 0.6f, 1.f), m_status_text);
     }
 
     m_imgui->text_colored(ImVec4(0.5f, 0.5f, 0.5f, 1.f),
-                          _u8L("Replaces the model's real geometry — Ctrl+Z undoes it like any other edit."));
+                          _u8L("Image stays on screen. Move the model (or the camera) so the surface sits behind it. Replaces real geometry — Ctrl+Z undoes."));
 
     m_imgui->end();
     m_imgui->pop_common_window_style();

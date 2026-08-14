@@ -30,14 +30,18 @@ namespace Slic3r::ImagePaint {
 // bake_candidate_mesh(), every new vertex stays exactly on the original
 // surface.
 //
-// Known v1 limitation: contour points along a mesh edge shared by two
-// faces are computed independently by each face's own local grid, so
-// adjacent faces are not guaranteed to agree exactly on where a color
-// boundary crosses that shared edge. This can produce a non-watertight
-// result where a boundary crosses a face edge. validate_baked_mesh()
-// (MeshBake.hpp) is expected to catch this (its_num_open_edges) rather
-// than let it silently commit — treat that as the safety net, not a
-// repair strategy. Planar projection only for v1.
+// Shared-edge crossings are computed once, not per face. Each unique mesh
+// edge is sampled in 3D (keyed by its two original vertex indices) and
+// every color-boundary crossing is recorded as a single Steiner vertex.
+// Both faces incident to that edge reuse that same vertex (same index, same
+// 3D position) so a color boundary that crosses a triangle edge cannot
+// produce a T-junction. Neighbors that are not themselves paint candidates
+// but share a crossed edge are remeshed just enough to include those
+// Steiner points (no extra vertices on their other edges). On-edge
+// marching-squares points are snapped to the cached crossings / corners
+// rather than kept as independently interpolated positions.
+//
+// Planar projection only for v1.
 Expected<BakedMesh, ImagePaintError>
 remesh_by_color_boundary(const std::vector<Vec3f>&       vertices,
                          const std::vector<Vec3i32>&     indices,

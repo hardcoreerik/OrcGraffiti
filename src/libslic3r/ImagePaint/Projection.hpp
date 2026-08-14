@@ -92,6 +92,24 @@ fit_planar_projection(Span<const Vec3f> vertices,
                       double            image_aspect_w_over_h = 0.0,
                       double            margin = 1.02);
 
+// Convert a screen-centered overlay (fractions of the viewport) into
+// millimetre width/height on a plane `plane_distance_mm` in front of the
+// camera. Same space as the camera near-plane size (typically world mm).
+//
+// Orthographic: size is independent of distance (near plane already is
+// the world extent). Perspective: size scales by distance / near_z.
+// Used by Mesh Graffiti's screen-locked overlay so Apply paints whatever
+// sits behind the on-screen image, not a View-preset silhouette fit.
+void screen_overlay_to_plane_mm(double overlay_over_viewport_w,
+                                double overlay_over_viewport_h,
+                                double near_width_mm,
+                                double near_height_mm,
+                                double near_z_mm,
+                                double plane_distance_mm,
+                                bool   perspective,
+                                double& width_mm,
+                                double& height_mm);
+
 // Project a single point from the coordinate space of the ProjectorFrame.
 // p must already be in the same space as frame.origin/axes.
 ProjectedPoint project_planar(const Vec3d&                   p,

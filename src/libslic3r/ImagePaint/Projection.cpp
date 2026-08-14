@@ -115,6 +115,32 @@ fit_planar_projection(Span<const Vec3f> vertices,
     return s;
 }
 
+void screen_overlay_to_plane_mm(double overlay_over_viewport_w,
+                                double overlay_over_viewport_h,
+                                double near_width_mm,
+                                double near_height_mm,
+                                double near_z_mm,
+                                double plane_distance_mm,
+                                bool   perspective,
+                                double& width_mm,
+                                double& height_mm)
+{
+    overlay_over_viewport_w = std::max(0.0, overlay_over_viewport_w);
+    overlay_over_viewport_h = std::max(0.0, overlay_over_viewport_h);
+    near_width_mm  = std::abs(near_width_mm);
+    near_height_mm = std::abs(near_height_mm);
+
+    double scale = 1.0;
+    if (perspective) {
+        const double near_z = std::max(std::abs(near_z_mm), 1e-9);
+        const double dist   = std::max(plane_distance_mm, 1e-9);
+        scale = dist / near_z;
+    }
+
+    width_mm  = near_width_mm  * scale * overlay_over_viewport_w;
+    height_mm = near_height_mm * scale * overlay_over_viewport_h;
+}
+
 std::pair<double,double> apply_rotation_mirror(double u, double v,
                                                 double rotation_radians,
                                                 bool   mirror_u,

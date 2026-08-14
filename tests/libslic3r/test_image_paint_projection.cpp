@@ -506,3 +506,30 @@ TEST_CASE("project_spherical is continuous across the seam for a full wrap", "[I
     CHECK(just_before.u > 0.99);
     CHECK(just_after.u  < 0.01);
 }
+
+TEST_CASE("screen_overlay_to_plane_mm is independent of distance in orthographic", "[ImagePaint][Projection]")
+{
+    double w = 0, h = 0;
+    screen_overlay_to_plane_mm(/*frac_w=*/0.5, /*frac_h=*/0.25,
+                               /*near_w=*/200.0, /*near_h=*/100.0,
+                               /*near_z=*/10.0, /*dist=*/50.0,
+                               /*perspective=*/false, w, h);
+    CHECK_THAT(w, WithinAbs(100.0, 1e-9));
+    CHECK_THAT(h, WithinAbs(25.0, 1e-9));
+
+    double w2 = 0, h2 = 0;
+    screen_overlay_to_plane_mm(0.5, 0.25, 200.0, 100.0, 10.0, 999.0, false, w2, h2);
+    CHECK_THAT(w2, WithinAbs(w, 1e-9));
+    CHECK_THAT(h2, WithinAbs(h, 1e-9));
+}
+
+TEST_CASE("screen_overlay_to_plane_mm scales by distance/near_z in perspective", "[ImagePaint][Projection]")
+{
+    double w = 0, h = 0;
+    screen_overlay_to_plane_mm(/*frac_w=*/1.0, /*frac_h=*/1.0,
+                               /*near_w=*/20.0, /*near_h=*/10.0,
+                               /*near_z=*/10.0, /*dist=*/40.0,
+                               /*perspective=*/true, w, h);
+    CHECK_THAT(w, WithinAbs(80.0, 1e-9));
+    CHECK_THAT(h, WithinAbs(40.0, 1e-9));
+}

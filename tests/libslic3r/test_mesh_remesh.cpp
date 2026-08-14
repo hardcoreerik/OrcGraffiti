@@ -3,10 +3,14 @@
 
 #include "libslic3r/ImagePaint/MeshRemesh.hpp"
 #include "libslic3r/ImagePaint/MeshBake.hpp"
+#include "libslic3r/ImagePaint/ImageDecoder.hpp"
 #include "libslic3r/ImagePaint/Projection.hpp"
 #include "libslic3r/TriangleMesh.hpp"
+#include "libslic3r/MeshBoolean.hpp"
+#include "test_utils.hpp"
 
 #include <cmath>
+#include <filesystem>
 
 using namespace Slic3r;
 using namespace Slic3r::ImagePaint;
@@ -146,16 +150,13 @@ TEST_CASE("remesh_by_color_boundary untouched faces stay a single triangle", "[I
     CHECK(none_triangles >= 2);
 }
 
-TEST_CASE("remesh_by_color_boundary output passes or is safely rejected by bake-stage validation", "[ImagePaint][MeshRemesh]")
+TEST_CASE("remesh_by_color_boundary shared-edge color crossings stay manifold", "[ImagePaint][MeshRemesh]")
 {
-    // This is the real test of the v1 known-limitation documented in
-    // MeshRemesh.hpp: contour points along a mesh edge shared by two faces
-    // are computed independently by each face's own local grid, so
-    // adjacent faces are not guaranteed to agree on where a boundary
-    // crosses that shared edge. Piping the output through the same
-    // validate_baked_mesh() used by the uniform-grid bake path is the
-    // actual test of whether that risk manifests in practice here, rather
-    // than a hypothetical worry.
+    // The vertical split crosses the cube top face's shared diagonal. Both
+    // top triangles must reuse the same cached crossing vertex rather than
+    // independently interpolating it from their local grids — otherwise
+    // validate_baked_mesh() rejects the result as non-manifold and Apply
+    // fails. This is the defining property of the edge-crossing cache.
     const auto image = make_vertical_split_image(64, 64, {255, 0, 0}, {0, 255, 0});
 
     const auto result = remesh_by_color_boundary(
@@ -163,20 +164,167 @@ TEST_CASE("remesh_by_color_boundary output passes or is safely rejected by bake-
         red_and_green_filaments(), two_colors(), /*grid_resolution=*/10);
     REQUIRE(result.has_value());
 
-    // On this fixture the color boundary happens to cross the diagonal edge
-    // shared by the cube's two top-face triangles — exactly the known
-    // limitation. Either outcome is acceptable for v1: the two faces'
-    // independently-traced crossing points happened to agree (validation
-    // passes), or they didn't and validate_baked_mesh() correctly rejects
-    // the result instead of silently committing a gap. What would be a
-    // real bug is anything else — a crash, or validation silently passing
-    // on a mesh that actually has open edges.
     const auto validated = validate_baked_mesh(*result);
-    if (validated.has_value()) {
-        CHECK(its_num_open_edges(validated->mesh) == 0);
-    } else {
-        CHECK(validated.error().code == ImagePaintErrorCode::BakeInvalidGeometry);
+    REQUIRE(validated.has_value());
+    CHECK(its_num_open_edges(validated->mesh) == 0);
+
+    bool found_red = false, found_green = false;
+    for (auto s : validated->triangle_states) {
+        if (s == kStateExtruderMin)     found_red = true;
+        if (s == kStateExtruderMin + 1) found_green = true;
     }
+    CHECK(found_red);
+    CHECK(found_green);
+
+    // The color boundary crosses the top diagonal (0,0,1)-(1,1,1) at its
+    // midpoint. That Steiner vertex must exist and be referenced — two
+    // faces sharing an index, not two nearby-but-distinct positions.
+    constexpr float eps = 2e-2f;
+    int midpoint_index = -1;
+    for (int i = 0; i < static_cast<int>(validated->mesh.vertices.size()); ++i) {
+        const auto& v = validated->mesh.vertices[static_cast<std::size_t>(i)];
+        if (std::abs(v.x() - 0.5f) < eps &&
+            std::abs(v.y() - 0.5f) < eps &&
+            std::abs(v.z() - 1.0f) < eps) {
+            midpoint_index = i;
+            break;
+        }
+    }
+    REQUIRE(midpoint_index >= 0);
+
+    int uses = 0;
+    for (const auto& tri : validated->mesh.indices)
+        if (tri[0] == midpoint_index || tri[1] == midpoint_index || tri[2] == midpoint_index)
+            ++uses;
+    CHECK(uses >= 2);
+}
+
+TEST_CASE("remesh_by_color_boundary leaves the unpainted bottom unsplit", "[ImagePaint][MeshRemesh]")
+{
+    const auto image = make_vertical_split_image(64, 64, {255, 0, 0}, {0, 255, 0});
+
+    const auto result = remesh_by_color_boundary(
+        cube_vertices(), cube_indices(), image, top_down_projector(),
+        red_and_green_filaments(), two_colors(), /*grid_resolution=*/10);
+    REQUIRE(result.has_value());
+
+    std::size_t bottom_triangles = 0;
+    for (const auto& tri : result->mesh.indices) {
+        const auto& a = result->mesh.vertices[tri[0]];
+        const auto& b = result->mesh.vertices[tri[1]];
+        const auto& c = result->mesh.vertices[tri[2]];
+        if (std::abs(a.z()) < 1e-3f && std::abs(b.z()) < 1e-3f && std::abs(c.z()) < 1e-3f)
+            ++bottom_triangles;
+    }
+    CHECK(bottom_triangles == 2);
+}
+
+TEST_CASE("remesh_by_color_boundary shared-edge cache is deterministic", "[ImagePaint][MeshRemesh]")
+{
+    const auto image = make_vertical_split_image(64, 64, {255, 0, 0}, {0, 255, 0});
+
+    std::size_t verts = 0, faces = 0;
+    for (int i = 0; i < 8; ++i) {
+        const auto result = remesh_by_color_boundary(
+            cube_vertices(), cube_indices(), image, top_down_projector(),
+            red_and_green_filaments(), two_colors(), /*grid_resolution=*/10);
+        REQUIRE(result.has_value());
+        const auto validated = validate_baked_mesh(*result);
+        REQUIRE(validated.has_value());
+        CHECK(its_num_open_edges(validated->mesh) == 0);
+        if (i == 0) {
+            verts = validated->mesh.vertices.size();
+            faces = validated->mesh.indices.size();
+        } else {
+            CHECK(validated->mesh.vertices.size() == verts);
+            CHECK(validated->mesh.indices.size() == faces);
+        }
+    }
+}
+
+TEST_CASE("remesh_by_color_boundary stays manifold on a dense grid whose color boundary crosses many shared edges", "[ImagePaint][MeshRemesh]")
+{
+    // 8x8 quads (128 triangles) in the z=1 plane. The vertical split crosses
+    // every interior edge that straddles x=0.5 — the case that used to
+    // fail validate_baked_mesh() on anything denser than a lucky cube.
+    constexpr int n = 8;
+    std::vector<Vec3f> vertices;
+    std::vector<Vec3i32> indices;
+    vertices.reserve(static_cast<std::size_t>(n + 1) * (n + 1));
+    for (int j = 0; j <= n; ++j)
+        for (int i = 0; i <= n; ++i)
+            vertices.push_back({static_cast<float>(i) / n, static_cast<float>(j) / n, 1.f});
+    for (int j = 0; j < n; ++j) {
+        for (int i = 0; i < n; ++i) {
+            const int a = j * (n + 1) + i;
+            indices.push_back({a, a + 1, a + n + 2});
+            indices.push_back({a, a + n + 2, a + n + 1});
+        }
+    }
+
+    const auto image = make_vertical_split_image(64, 64, {255, 0, 0}, {0, 255, 0});
+    const auto result = remesh_by_color_boundary(
+        vertices, indices, image, top_down_projector(),
+        red_and_green_filaments(), two_colors(), /*grid_resolution=*/8);
+    REQUIRE(result.has_value());
+
+    // This is an open plane (32 boundary edges). The vertical split adds
+    // one Steiner on the top and bottom boundaries, so 34 open edges is
+    // the correct, T-junction-free count — not zero. validate_baked_mesh()
+    // requires a closed solid and is the wrong checker here.
+    CHECK(its_num_open_edges(result->mesh) == 34);
+    CHECK(result->mesh.indices.size() > indices.size());
+    const TriangleMesh check_mesh(result->mesh);
+    CHECK_FALSE(MeshBoolean::cgal::does_self_intersect(check_mesh));
+
+    bool found_red = false, found_green = false;
+    for (auto s : result->triangle_states) {
+        if (s == kStateExtruderMin)     found_red = true;
+        if (s == kStateExtruderMin + 1) found_green = true;
+    }
+    CHECK(found_red);
+    CHECK(found_green);
+}
+
+TEST_CASE("remesh_by_color_boundary on a real cube obj plus photo is manifold when the photo is present", "[ImagePaint][MeshRemesh]")
+{
+    // Not a substitute for a human GUI check — this runs the same remesh
+    // Apply uses, on a loaded .obj and a real JPEG if one is sitting in
+    // the build tree. Skips cleanly when the photo is not there.
+    const std::filesystem::path photo{"F:/Ai/OrcGraffiti/build/garth.jpg"};
+    if (!std::filesystem::exists(photo))
+        SKIP("garth.jpg not in the build tree");
+
+    const TriangleMesh mesh = load_model("20mm_cube.obj");
+    REQUIRE_FALSE(mesh.its.indices.empty());
+
+    auto image = decode_image(photo);
+    REQUIRE(image.has_value());
+
+    const auto aspect = static_cast<double>(image->width) / std::max(1, image->height);
+    std::vector<Vec3f> vertices = mesh.its.vertices;
+    std::vector<Vec3i32> indices;
+    indices.reserve(mesh.its.indices.size());
+    for (const auto& t : mesh.its.indices)
+        indices.push_back(t.cast<int32_t>());
+
+    auto fitted = fit_planar_projection(
+        Span<const Vec3f>(vertices.data(), vertices.size()),
+        Vec3d(0, 1, 0), Vec3d(0, 0, 1), aspect, 1.02);
+    REQUIRE(fitted.has_value());
+    fitted->front_face_cosine_threshold = 0.05;
+    fitted->minimum_coverage = 0.05;
+    fitted->width_mm  *= 0.30;
+    fitted->height_mm *= 0.30;
+
+    const auto result = remesh_by_color_boundary(
+        vertices, indices, *image, *fitted,
+        red_and_green_filaments(), two_colors(), /*grid_resolution=*/8);
+    REQUIRE(result.has_value());
+
+    const auto validated = validate_baked_mesh(*result);
+    REQUIRE(validated.has_value());
+    CHECK(its_num_open_edges(validated->mesh) == 0);
 }
 
 TEST_CASE("remesh_by_color_boundary on an empty mesh returns NoEligibleFaces", "[ImagePaint][MeshRemesh]")

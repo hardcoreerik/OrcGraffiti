@@ -2,18 +2,15 @@
 
 ## Current Phase
 
-Phase 6+ mapping quality green. **Agent Surface AS-1/AS-2/AS-4 implemented
-and tested; AS-3 write path (`paint --out`) DISABLED — confirmed broken
-against real slicer software twice.**
-Phase 7: cylindrical/spherical projection math complete AND wired into the
-sampling pipeline (FaceSampler/ImagePaintPipeline) — not yet exposed via
-any CLI flag or GUI control.
-GUI Image Paint gizmo reworked this session to match MakerWorld's Mesh
-Graffiti workflow (View preset + Size% + Rotate, camera stays fixed and the
-model is moved into position) — see "GUI gizmo rework" section below for
-the interaction model AND a hard finding about why per-triangle painting
-can't visually match MakerWorld's fine-detail results without violating
-the no-remesh MVP invariant.
+Shared-edge remesh cache + Mesh Graffiti screen-locked overlay both
+landed this session (see sections below). Apply now uses the live camera
+and whatever sits behind the on-screen image — not the six View-preset
+buttons. **AS-3 `paint --out` remains DISABLED.**
+
+Human GUI confirmation on a real curved mesh is still required: the
+library remesh of `20mm_cube.obj` + `garth.jpg` is manifold, ALL_BUILD
+produced `orca-slicer.exe`, but a human still has to orbit a model under
+the overlay and click Apply.
 
 ## Current Branch
 
@@ -647,26 +644,131 @@ GUI DLL rebuilt, full `ALL_BUILD` clean. Not yet re-tested by the user —
 next recording should show a much wider comfortable range around the
 default instead of a razor-thin sweet spot.
 
+## Shared-edge crossing cache — the v1 remesh T-junction is fixed
+
+This was the highest-value remaining gap vs. MakerWorld: adjacent faces
+independently rediscovered where a color boundary crossed their shared
+edge, so `validate_baked_mesh()` rejected the result (open edges) and
+Apply failed on any real image whose boundary crossed a triangle edge —
+the common case, not a rare one.
+
+**What landed** (`MeshRemesh.hpp/.cpp`):
+
+1. **One cache per unique mesh edge**, keyed by the two original vertex
+   indices. The 3D edge is sampled once; classification transitions are
+   refined by binary search; each crossing is a single Steiner vertex
+   with one global index.
+2. **Both incident faces reuse that same index.** Output vertices start
+   as the original mesh (indices preserved). Unremeshed faces keep their
+   original triangles. Remeshed faces emit corners by those original
+   indices plus the cached Steiners — `its_num_open_edges` keys on
+   indices, so sharing the index is load-bearing, not just sharing the
+   3D position.
+3. **One-ring expansion.** A non-candidate that shares a *crossed* edge
+   with a candidate is remeshed just enough to include those Steiners
+   (no extra vertices on its other edges). Crossings are only *used*
+   when every incident face will consume them — otherwise the long
+   original edge is kept and both sides stay compatible.
+4. **Marching-squares hits on a triangle edge snap to the cache**
+   (corners + Steiners). Same-edge MS segments are not fed to CDT —
+   they overlap the Steiner-split hull and are the same class of
+   constraint that SIGSEGV'd v1.
+5. **Local CDT** (`triangulate_face_points`) returns every finite face.
+   `Triangulation::triangulate()` is the wrong contract here: it
+   flood-fills only the interior of oriented constraint rings, which
+   punched holes in unpainted parts of a face. Consecutive hull
+   segments are constrained so inexact constructions cannot treat a
+   Steiner as slightly interior and emit the original long edge (that
+   produced a reliable 3-open-edge T-junction during testing). If CDT
+   still emits a hull shortcut, that face falls back to a Steiner-aware
+   fan (opposite-vertex if one refined edge, centroid fan if two+).
+   Fan-from-vertex-0 is *not* valid — it skips Steiners on edges
+   incident to the apex and reopens the T-junction.
+
+**Bugs found while implementing, not hypothetical:**
+
+- `OnTriangleEdge` default values (`None=0, AB=1, BC=3`) indexed past
+  `edge_local[3]` — instant SIGSEGV on any contour that hit the
+  hypotenuse. Values are now `None=-1, AB=0, AC=1, BC=2`.
+- Fan-from-first-vertex emitted the original long edge through a
+  Steiner. Diagnosed from `its_num_open_edges == 3` on the cube
+  fixture (exactly one skipped diagonal).
+
+**Tests** (`test_mesh_remesh.cpp`): the old "passes *or* is safely
+rejected" case is gone — that was a tautology. New requirements:
+
+- shared-edge color crossings stay manifold (`validate_baked_mesh`
+  succeeds, `its_num_open_edges == 0`, the diagonal midpoint exists as
+  one shared index used by ≥2 triangles, both colors present)
+- unpainted bottom stays exactly 2 triangles (one-ring expansion does
+  not flood the whole cube)
+- 8 repeated runs, same vertex/face counts, always validates
+
+118/118 ImagePaint-related Catch2 cases (2449 assertions) after the
+overlay math tests + dense-grid remesh + `20mm_cube.obj`/`garth.jpg`
+round. MeshRemesh 9 cases green.
+
+## Screen-locked overlay — Mesh Graffiti now matches the requested workflow
+
+`GLGizmoMeshGraffiti` no longer drives paint from the six View-preset
+buttons. The image is a semi-transparent screen-space overlay (GLTexture
+from wxImage RGBA → `load_from_raw_data`, drawn with ImGui
+`GetForegroundDrawList()->AddImageQuad`) locked to the canvas centre.
+Size% and Rotate (and Flip) update the quad live using the same 2D
+rotation as `apply_rotation_mirror`. Look buttons remain as camera
+shortcuts only (`select_view`); Apply is enabled as soon as an image is
+loaded.
+
+Apply builds a camera-facing `PlanarProjectionSettings` in volume-local
+space: look/up from the current camera through
+`GLVolume::world_matrix().inverse()`, origin at the screen-centre ray
+on the plane through the volume bbox centre, width/height from
+`screen_overlay_to_plane_mm` (new, tested) so the painted region is
+whatever sits behind the overlay at that camera distance — not a
+silhouette fit of the whole mesh. GLGizmoImagePainter was not edited.
+
+**Verified:** ALL_BUILD Release produced `build/src/Release/orca-slicer.exe`
+(gizmo + remesh linked). A second launch exited immediately — an
+`orca-slicer` instance started 2026-08-12 is still running; this
+session did not kill it or paint inside it. `remesh_by_color_boundary`
+on `tests/data/20mm_cube.obj` + `build/garth.jpg` passed
+`validate_baked_mesh()` (manifold). Dense 8×8 grid (128 triangles,
+color boundary crossing many shared edges) has the expected 34 open
+edges (32 original plane-boundary + 2 Steiner splits on the
+silhouette) and does not self-intersect.
+
+**Not verified by a human in the GUI:** overlay alignment vs. the
+painted result, rotation direction on screen vs. on the mesh, and
+Apply on a curved production model. That is the next check. Do not
+treat the photo-on-cube library remesh as a substitute for orbiting
+the overlay and clicking Apply.
+
 ## Next Three Tasks
 
-1. Waiting on the user's live GUI test of the Image Paint gizmo (launched
-   this session, current build) — this is the real MVP verification that
-   hasn't happened yet, separate from the (disabled) CLI write path.
-2. Cylindrical/spherical projection is wired into the pipeline but has no
-   user-facing entry point yet — a `--view` extension or new flag for the
-   CLI, or a gizmo mode selector for the GUI, would be the next step to
-   make it actually usable. Occlusion (same Roadmap §11 section) still
-   needs design work before implementation — the exit gate ("predictable
-   images without painting hidden surfaces") depends on it for cup/sphere
-   fixtures to mean anything.
-3. AS-5 (MCP thin wrap) remains blocked behind AS-3 per Roadmap.md §20's
-   own gate rule — AS-3 is explicitly disabled, not just unverified.
+1. Human GUI test: load a real model + photo, confirm the image sits
+   locked at screen centre while orbit/pan/zoom move the model under
+   it, then Apply. Check the painted region matches the overlay, not
+   a leftover View-preset plane.
+2. If the overlay and the paint disagree (mirror, rotation sign, or
+   size at the model's depth), fix `render_screen_overlay` /
+   `build_camera_facing_projection` against that recording — do not
+   guess.
+3. Do not re-enable AS-3 `paint --out`. Do not start cylindrical/
+   spherical GUI exposure until (1) is signed off.
 
 ## Open PRs
 
 https://github.com/hardcoreerik/OrcGraffiti/pull/1
 
 ## Updated
+
+2026-08-13 — **Shared-edge crossing cache** plus **screen-locked Mesh
+Graffiti overlay**. Adjacent remesh faces share one Steiner per
+color-boundary crossing. Apply uses the live camera / overlay, not the
+six View-preset buttons. 118/118 ImagePaint-related Catch2 cases,
+including `20mm_cube.obj` + `garth.jpg`. ALL_BUILD Release. GUI
+Apply-on-a-curved-model not run (existing orca-slicer instance left
+untouched).
 
 2026-08-11 — **AS-3 `paint --out` disabled** after a second fix attempt
 was also confirmed broken by direct human testing (FlashForge Studio hung
